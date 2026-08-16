@@ -80,6 +80,20 @@ switch (args[0])
         result.SaveGLB(args[2]);
         return 0;
     }
+    case "groups":
+    {
+        // cli groups <file> [--tiling]
+        var doc = GltfDocument.Load(args[1]);
+        var crit = new GltfBakeTool.Core.Grouping.GroupCriteria { SplitHighTiling = args.Contains("--tiling") };
+        var groups = GltfBakeTool.Core.Grouping.JoinGrouping.Compute(doc.Model, crit);
+        foreach (var g in groups)
+        {
+            Console.WriteLine($"[{g.Index}] {g}");
+            foreach (var m in g.Materials) Console.WriteLine($"      material {(m == null ? "<default>" : $"#{m.LogicalIndex} '{m.Name}'")}  ext=[{string.Join(",", GltfBakeTool.Core.Grouping.JoinGrouping.ExtensionsOf(m))}]");
+            if (g.MixedNodes.Count > 0) Console.WriteLine($"      mixed nodes: {string.Join(", ", g.MixedNodes.Select(n => n.Name))}");
+        }
+        return 0;
+    }
     case "materials":
     {
         var doc = GltfDocument.Load(args[1]);

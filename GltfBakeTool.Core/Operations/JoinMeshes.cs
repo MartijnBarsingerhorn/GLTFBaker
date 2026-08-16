@@ -135,6 +135,18 @@ public static class JoinMeshes
             foreach (int i in used) usage.Include(Vector2.Transform(uvs[i], sp.UvTransform));
         }
 
+        // ---- extensions the merged (core PBR) material cannot carry --------------------------------
+        foreach (var u in usages)
+        {
+            if (u.Material == null) continue;
+            var ext = Grouping.JoinGrouping.ExtensionsOf(u.Material);
+            var mname = string.IsNullOrEmpty(u.Material.Name) ? $"material #{u.Material.LogicalIndex}" : u.Material.Name;
+            if (ext.Remove("KHR_materials_pbrSpecularGlossiness"))
+                warnings.Add($"'{mname}': spec-gloss material approximated (diffuse → base colour, metallic 0, roughness = 1 − glossiness).");
+            if (ext.Count > 0)
+                warnings.Add($"'{mname}': {string.Join(", ", ext.OrderBy(x => x))} not carried over by the merged material.");
+        }
+
         // ---- bake atlas ------------------------------------------------------------------------
         var atlas = MaterialAtlasBaker.Bake(usages, options.Atlas);
         warnings.AddRange(atlas.Warnings);
