@@ -58,6 +58,17 @@ checked subtrees. Candidates are shown grey/italic in the tree beforehand.
    place a new node under the common ancestor, clear the source meshes, remove the emptied nodes,
    prune orphaned meshes/materials/textures/images/accessors/bufferViews and rebuild the buffer.
 
+### Join groups (`Core/Grouping/JoinGrouping`)
+One merged material cannot express some properties per part, so primitives are classified by a
+**compatibility key**: alpha class (blend vs opaque/mask, optionally mask vs opaque), unlit,
+transmission/volume, clearcoat, other KHR material extensions, textures on TEXCOORD_1+, heavy UV
+tiling, double-sided, and skin. The "Join groups" panel shows the resulting groups (colour badge,
+counts, mixed nodes), lets you toggle which criteria count, tints the viewport by group and checks a
+group's nodes on click. **Join per group** produces one mesh + atlas per group in a single undoable
+pass (`<Name>_<group>`); **Join checked** still forces everything into one mesh (with the alpha policy).
+Nodes whose primitives land in different groups keep a new mesh with the leftover primitives — no
+geometry is duplicated. Extensions the merged material cannot carry are reported per material.
+
 ## Known limitations / ideas
 * Textures on TEXCOORD_1+ cannot be atlased (dropped for that channel, warning).
 * Heavily tiled materials (e.g. 48×48) get clamped; an alternative "keep tiling, reduce resolution"
@@ -66,12 +77,14 @@ checked subtrees. Candidates are shown grey/italic in the tree beforehand.
 * Normal-map handedness after mirroring: `TANGENT.w` is flipped when all sources carry tangents;
   otherwise tangents are dropped (clients derive them).
 * Morph targets are not merged. Different skins cannot be joined into one mesh.
-* Merged material inherits the most permissive alpha mode; a policy option (opaque/mask/blend) would help.
+* Clearcoat / specular / sheen / transmission etc. are not baked (reported and, by default, split into their own group).
 
 ## CLI examples
 ```
 GltfBakeTool.Cli info  model.glb
 GltfBakeTool.Cli clean model.glb out.glb [--fold]
-GltfBakeTool.Cli join  model.glb out.glb [--nodes 3,7] [--atlas 2048] [--jpeg]
+GltfBakeTool.Cli join  model.glb out.glb [--nodes 3,7] [--atlas 2048] [--jpeg] [--alpha auto|opaque|mask|blend] [--per-group [--tiling]]
+GltfBakeTool.Cli groups model.glb [--tiling]
+GltfBakeTool.Cli materials model.glb
 GltfBakeTool.Cli dump-images out.glb ./images
 ```

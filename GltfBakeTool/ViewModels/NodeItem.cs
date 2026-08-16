@@ -25,8 +25,8 @@ public sealed partial class NodeItem : ObservableObject
     [ObservableProperty] private bool _isExpanded = true;
     [ObservableProperty] private bool _isChecked;
 
-    /// <summary>Colour of the join group this node's mesh belongs to (null: no mesh; grey when primitives span several groups).</summary>
-    [ObservableProperty] private System.Windows.Media.Brush? _groupBrush;
+    /// <summary>One brush per join group this node's primitives belong to (empty: no mesh). Mixed nodes show several badges.</summary>
+    public ObservableCollection<System.Windows.Media.Brush> GroupBrushes { get; } = new();
     [ObservableProperty] private string? _groupToolTip;
 
     public event Action<NodeItem>? CheckedChanged;

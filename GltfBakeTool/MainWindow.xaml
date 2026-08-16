@@ -65,18 +65,16 @@
                         <HierarchicalDataTemplate DataType="{x:Type vm:NodeItem}" ItemsSource="{Binding Children}">
                             <StackPanel Orientation="Horizontal">
                                 <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                <Border Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0" VerticalAlignment="Center"
-                                        Background="{Binding GroupBrush}" ToolTip="{Binding GroupToolTip}">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding GroupBrush}" Value="{x:Null}">
-                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                </Border>
+                                <ItemsControl ItemsSource="{Binding GroupBrushes}" ToolTip="{Binding GroupToolTip}" VerticalAlignment="Center" Margin="0,0,4,0">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Width="10" Height="10" CornerRadius="2" Margin="0,0,1,0" Background="{Binding}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">

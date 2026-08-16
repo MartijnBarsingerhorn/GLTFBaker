@@ -102,20 +102,15 @@ public sealed partial class MainViewModel : ObservableObject
         }
         foreach (var it in AllItems())
         {
+            it.GroupBrushes.Clear();
             if (byNode.TryGetValue(it.Node, out var list))
             {
-                if (list.Count == 1)
-                {
-                    it.GroupBrush = list[0].Brush;
-                    it.GroupToolTip = $"Join group {list[0].Index}: {list[0].Label}";
-                }
-                else
-                {
-                    it.GroupBrush = System.Windows.Media.Brushes.LightGray;
-                    it.GroupToolTip = "Primitives in several join groups: " + string.Join(", ", list.Select(g => $"{g.Index} ({g.Label})"));
-                }
+                foreach (var g in list) it.GroupBrushes.Add(g.Brush);
+                it.GroupToolTip = list.Count == 1
+                    ? $"Join group {list[0].Index}: {list[0].Label}"
+                    : "Primitives in several join groups: " + string.Join(", ", list.Select(g => $"{g.Index} ({g.Label})"));
             }
-            else { it.GroupBrush = null; it.GroupToolTip = null; }
+            else it.GroupToolTip = null;
         }
         SelectionChanged?.Invoke();
     }
