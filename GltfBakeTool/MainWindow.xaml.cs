@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Windows;
 using GltfBakeTool.Core.Scene;
 using GltfBakeTool.ViewModels;
@@ -86,6 +86,19 @@ public partial class MainWindow : Window
         ClearSelection();
         e.Handled = true;
     }
+
+    /// <summary>Right-click: remember (and select) the item under the mouse so the menu's node commands act on it.</summary>
+    private void NodeTree_ContextMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        System.Windows.Controls.TreeViewItem? tvi = null;
+        for (var d = e.OriginalSource as DependencyObject; d != null && d != NodeTree; d = System.Windows.Media.VisualTreeHelper.GetParent(d))
+            if (d is System.Windows.Controls.TreeViewItem t) { tvi = t; break; }
+        var item = tvi?.DataContext as NodeItem;
+        _vm.ContextItem = item;
+        if (item != null && !item.IsSelected) item.IsSelected = true;
+    }
+
+    private void Deselect_Click(object sender, RoutedEventArgs e) => ClearSelection();
 
     private void ZoomExtents_Click(object sender, RoutedEventArgs e) => _viewer.ZoomExtents();
 

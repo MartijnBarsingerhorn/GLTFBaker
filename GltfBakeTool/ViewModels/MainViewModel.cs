@@ -137,6 +137,68 @@ public sealed partial class MainViewModel : ObservableObject
         AddLog("Unchecked all nodes.");
     }
 
+    /// <summary>Checks only the mesh-carrying nodes (and, by cascade, whatever hangs under them).</summary>
+    [RelayCommand(CanExecute = nameof(HasDocument))]
+    private void CheckMeshNodes()
+    {
+        var items = AllItems().ToList();
+        int n = 0;
+        using (BatchChecks())
+        {
+            foreach (var it in items) it.IsChecked = false;
+            foreach (var it in items) if (it.HasMesh) { it.IsChecked = true; n++; }
+        }
+        AddLog($"Checked {n} mesh node(s).");
+    }
+
+    [RelayCommand(CanExecute = nameof(HasDocument))]
+    private void ExpandAll() { foreach (var it in AllItems()) it.IsExpanded = true; }
+
+    [RelayCommand(CanExecute = nameof(HasDocument))]
+    private void CollapseAll() { foreach (var it in AllItems()) it.IsExpanded = false; }
+
+    /// <summary>Node the tree's context menu was opened on (null when opened on empty space).</summary>
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(CheckSubtreeCommand), nameof(UncheckSubtreeCommand), nameof(CheckOnlySubtreeCommand),
+                                nameof(ExpandSubtreeCommand), nameof(CollapseSubtreeCommand))]
+    private NodeItem? _contextItem;
+
+    private bool HasContextItem => ContextItem != null;
+
+    [RelayCommand(CanExecute = nameof(HasContextItem))]
+    private void CheckSubtree() { if (ContextItem is { } it) using (BatchChecks()) it.IsChecked = true; }
+
+    [RelayCommand(CanExecute = nameof(HasContextItem))]
+    private void UncheckSubtree() { if (ContextItem is { } it) using (BatchChecks()) it.IsChecked = false; }
+
+    /// <summary>Checks the node and its descendants, unchecking everything else.</summary>
+    [RelayCommand(CanExecute = nameof(HasContextItem))]
+    private void CheckOnlySubtree()
+    {
+        if (ContextItem is not { } it) return;
+        using (BatchChecks())
+        {
+            foreach (var o in AllItems()) o.IsChecked = false;
+            it.IsChecked = true;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(HasContextItem))]
+    private void ExpandSubtree()
+    {
+        if (ContextItem is not { } it) return;
+        it.IsExpanded = true;
+        foreach (var d in it.Descendants()) d.IsExpanded = true;
+    }
+
+    [RelayCommand(CanExecute = nameof(HasContextItem))]
+    private void CollapseSubtree()
+    {
+        if (ContextItem is not { } it) return;
+        it.IsExpanded = false;
+        foreach (var d in it.Descendants()) d.IsExpanded = false;
+    }
+
     private void SetAllChecked(IReadOnlyList<NodeItem> items, bool value)
     {
         // parents cascade to children via OnIsCheckedChanged; setting every item explicitly is still needed
@@ -386,6 +448,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         RootNodes.Clear();
         SelectedNode = null;
+        ContextItem = null;
         if (Document != null)
         {
             var scene = Document.Model.DefaultScene ?? Document.Model.LogicalScenes.FirstOrDefault();
@@ -413,6 +476,9 @@ public sealed partial class MainViewModel : ObservableObject
         JoinPerGroupCommand.NotifyCanExecuteChanged();
         CheckAllCommand.NotifyCanExecuteChanged();
         UncheckAllCommand.NotifyCanExecuteChanged();
+        CheckMeshNodesCommand.NotifyCanExecuteChanged();
+        ExpandAllCommand.NotifyCanExecuteChanged();
+        CollapseAllCommand.NotifyCanExecuteChanged();
         if (raiseModelChanged) ModelChanged?.Invoke();
         RecomputeGroups();
     }

@@ -63,7 +63,41 @@
                     <TextBlock Text="Scene nodes" FontWeight="Bold" ToolTip="Ctrl+A checks all nodes (again: unchecks all), Ctrl+Shift+A unchecks all"/>
                 </DockPanel>
                 <TreeView x:Name="NodeTree" ItemsSource="{Binding RootNodes}" SelectedItemChanged="NodeTree_SelectedItemChanged"
-                          KeyDown="NodeTree_KeyDown" PreviewMouseLeftButtonDown="NodeTree_PreviewMouseLeftButtonDown">
+                          KeyDown="NodeTree_KeyDown" PreviewMouseLeftButtonDown="NodeTree_PreviewMouseLeftButtonDown"
+                          ContextMenuOpening="NodeTree_ContextMenuOpening">
+                    <TreeView.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem FontWeight="Bold" IsEnabled="False">
+                                <!-- TextBlock header: a string header would treat "_" in node names as an access-key marker -->
+                                <MenuItem.Header><TextBlock Text="{Binding ContextItem.Name}"/></MenuItem.Header>
+                                <MenuItem.Style>
+                                    <Style TargetType="MenuItem">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ContextItem}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </MenuItem.Style>
+                            </MenuItem>
+                            <MenuItem Header="Check node + children" Command="{Binding CheckSubtreeCommand}"/>
+                            <MenuItem Header="Uncheck node + children" Command="{Binding UncheckSubtreeCommand}"/>
+                            <MenuItem Header="Check only this node + children" Command="{Binding CheckOnlySubtreeCommand}"
+                                      ToolTip="Unchecks everything else first"/>
+                            <MenuItem Header="Expand node + children" Command="{Binding ExpandSubtreeCommand}"/>
+                            <MenuItem Header="Collapse node + children" Command="{Binding CollapseSubtreeCommand}"/>
+                            <Separator/>
+                            <MenuItem Header="Check all" InputGestureText="Ctrl+A" Command="{Binding CheckAllCommand}"/>
+                            <MenuItem Header="Uncheck all" InputGestureText="Ctrl+Shift+A" Command="{Binding UncheckAllCommand}"/>
+                            <MenuItem Header="Check mesh nodes only" Command="{Binding CheckMeshNodesCommand}"
+                                      ToolTip="Checks every node that carries a mesh (empties/transforms are unchecked unless they hang under a mesh node)"/>
+                            <Separator/>
+                            <MenuItem Header="Expand all" Command="{Binding ExpandAllCommand}"/>
+                            <MenuItem Header="Collapse all" Command="{Binding CollapseAllCommand}"/>
+                            <Separator/>
+                            <MenuItem Header="Deselect" InputGestureText="Esc" Click="Deselect_Click"/>
+                        </ContextMenu>
+                    </TreeView.ContextMenu>
                     <TreeView.ItemContainerStyle>
                         <Style TargetType="TreeViewItem">
                             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
