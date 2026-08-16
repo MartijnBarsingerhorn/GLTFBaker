@@ -1,5 +1,6 @@
 using System.Numerics;
 using GltfBakeTool.Core.Atlas;
+using GltfBakeTool.Core.Grouping;
 using GltfBakeTool.Core.Scene;
 using GltfBakeTool.Core.Structure;
 using SharpGLTF.Memory;
@@ -13,11 +14,15 @@ public sealed record JoinOptions
     public AtlasOptions Atlas { get; init; } = new();
     /// <summary>Remove the source mesh nodes (and the empties they leave behind) after joining.</summary>
     public bool RemoveSources { get; init; } = true;
+    /// <summary>When set, the selection is partitioned by material compatibility and one mesh is produced per group.</summary>
+    public GroupCriteria? Grouping { get; init; }
 }
 
-public sealed class JoinReport
+/// <summary>Result of one merged mesh (one per join group).</summary>
+public sealed class JoinGroupReport
 {
-    public List<string> Warnings { get; } = new();
+    public string Label { get; set; } = "";
+    public string NodeName { get; set; } = "";
     public int SourceNodes { get; set; }
     public int SourcePrimitives { get; set; }
     public int SourceMaterials { get; set; }
@@ -26,24 +31,45 @@ public sealed class JoinReport
     public int AtlasWidth { get; set; }
     public int AtlasHeight { get; set; }
     public List<string> Channels { get; } = new();
-    public string? PruneSummary { get; set; }
-    public int NewNodeIndex { get; set; } = -1;
-    /// <summary>Per source material: where it landed in the atlas.</summary>
     public List<string> CellTable { get; } = new();
+    public List<string> Warnings { get; } = new();
+    public int NewNodeIndex { get; set; } = -1;
     public override string ToString()
-        => $"joined {SourcePrimitives} primitive(s) from {SourceNodes} node(s), {SourceMaterials} material(s) → 1 primitive, {Vertices:N0} vertices, {Triangles:N0} triangles, atlas {AtlasWidth}×{AtlasHeight} [{string.Join(", ", Channels)}]"
+        => $"'{NodeName}'{(Label.Length > 0 ? $" [{Label}]" : "")}: {SourcePrimitives} primitive(s), {SourceMaterials} material(s) → {Vertices:N0} vertices, {Triangles:N0} triangles, atlas {AtlasWidth}×{AtlasHeight} [{string.Join(", ", Channels)}]"
          + (Warnings.Count > 0 ? $", {Warnings.Count} warning(s)" : "");
 }
 
-/// <summary>Merges the meshes under the selected nodes into one primitive with one atlased material.</summary>
+public sealed class JoinReport
+{
+    public List<JoinGroupReport> Groups { get; } = new();
+    /// <summary>Warnings not tied to a group (skipped primitives, structural notes).</summary>
+    public List<string> Warnings { get; } = new();
+    public string? PruneSummary { get; set; }
+    public int SourceNodes { get; set; }
+    public int SourcePrimitives => Groups.Sum(g => g.SourcePrimitives);
+    public IEnumerable<string> AllWarnings => Warnings.Concat(Groups.SelectMany(g => g.Warnings));
+    public override string ToString()
+    {
+        int w = AllWarnings.Count();
+        string tail = w > 0 ? $", {w} warning(s)" : "";
+        if (Groups.Count == 1)
+        {
+            var g = Groups[0];
+            return $"joined {g.SourcePrimitives} primitive(s) from {SourceNodes} node(s), {g.SourceMaterials} material(s) → 1 primitive, {g.Vertices:N0} vertices, {g.Triangles:N0} triangles, atlas {g.AtlasWidth}×{g.AtlasHeight} [{string.Join(", ", g.Channels)}]{tail}";
+        }
+        return $"joined {SourcePrimitives} primitive(s) from {SourceNodes} node(s) into {Groups.Count} meshes{tail}";
+    }
+}
+
+/// <summary>Merges the meshes under the selected nodes into one primitive + one atlased material per compatibility group.</summary>
 public static class JoinMeshes
 {
     private sealed class SourcePrim
     {
         public required Node Node;
         public required MeshPrimitive Prim;
-        public required Matrix4x4 World;
-        public required int UsageIndex;
+        public Matrix4x4 World;
+        public int UsageIndex;
         public Matrix3x2 UvTransform = Matrix3x2.Identity;
         public List<(int A, int B, int C)> Triangles = new();
     }
@@ -53,34 +79,14 @@ public static class JoinMeshes
         report = new JoinReport();
         var warnings = report.Warnings;
 
-        // ---- gather source nodes -------------------------------------------------------------
+        // ---- gather source primitives -------------------------------------------------------------
         var selected = nodeIndices.Select(i => model.LogicalNodes[i]).ToList();
         var sourceNodes = selected.SelectMany(GeometryExtractor.Flatten).Distinct().Where(n => n.Mesh != null).ToList();
         if (sourceNodes.Count == 0) throw new InvalidOperationException("Selection contains no meshes.");
 
-        var skins = sourceNodes.Select(n => n.Skin).Distinct().ToList();
-        Skin? skin = null;
-        if (skins.Count == 1 && skins[0] != null) skin = skins[0];
-        else if (skins.Count > 1)
-            throw new InvalidOperationException(skins.Any(s => s == null)
-                ? "Selection mixes skinned and rigid meshes; join them separately."
-                : "Selection contains meshes bound to different skins; only meshes sharing one skin can be joined.");
-
-        // ---- where the joined node will live: below the common ancestor of the sources -----------
-        var parent = CommonAncestor(sourceNodes);
-        if (parent != null && sourceNodes.Contains(parent)) parent = parent.VisualParent;
-        Matrix4x4.Invert(parent?.WorldMatrix ?? Matrix4x4.Identity, out var parentInverse);
-
-        // ---- collect primitives ---------------------------------------------------------------
-        var usages = new List<MaterialUsage>();
-        var usageIndex = new Dictionary<Material, int>();
-        int defaultUsage = -1;
         var prims = new List<SourcePrim>();
-
         foreach (var node in sourceNodes)
         {
-            // geometry is baked into the join parent's local space (skinned: bind space, untouched)
-            var world = skin != null ? Matrix4x4.Identity : node.WorldMatrix * parentInverse;
             foreach (var prim in node.Mesh!.Primitives)
             {
                 if (prim.DrawPrimitiveType is PrimitiveType.POINTS or PrimitiveType.LINES or PrimitiveType.LINE_LOOP or PrimitiveType.LINE_STRIP)
@@ -94,36 +100,144 @@ public static class JoinMeshes
                     continue;
                 }
                 if (prim.GetVertexAccessor("POSITION") == null) continue;
-
-                int ui;
-                if (prim.Material == null)
-                {
-                    if (defaultUsage < 0) { defaultUsage = usages.Count; usages.Add(new MaterialUsage { Material = null }); }
-                    ui = defaultUsage;
-                }
-                else if (!usageIndex.TryGetValue(prim.Material, out ui))
-                {
-                    ui = usages.Count;
-                    usageIndex[prim.Material] = ui;
-                    usages.Add(new MaterialUsage { Material = prim.Material });
-                }
-
-                var sp = new SourcePrim { Node = node, Prim = prim, World = world, UsageIndex = ui };
-                sp.Triangles = prim.GetTriangleIndices().ToList();
+                var sp = new SourcePrim { Node = node, Prim = prim, Triangles = prim.GetTriangleIndices().ToList() };
                 if (sp.Triangles.Count == 0) continue;
-                sp.UvTransform = UvTransformOf(prim.Material, warnings);
                 prims.Add(sp);
             }
         }
         if (prims.Count == 0) throw new InvalidOperationException("No joinable triangle primitives in the selection.");
 
-        // skipped primitives keep their node; the join must not clear those meshes.
-        var consumedNodes = prims.Select(p => p.Node).Distinct().ToList();
-        var partiallyConsumed = consumedNodes.Where(n => n.Mesh!.Primitives.Any(pr => !prims.Any(sp => sp.Prim == pr))).ToList();
-        foreach (var n in partiallyConsumed)
-            warnings.Add($"'{Name(n)}': some primitives were skipped, so the node keeps its original mesh (joined primitives now exist twice).");
+        // ---- partition into groups -----------------------------------------------------------------
+        List<List<SourcePrim>> groups;
+        List<string> groupLabels;
+        if (options.Grouping is { } criteria)
+        {
+            var tiling = criteria.SplitHighTiling ? JoinGrouping.ComputeHighTiling(sourceNodes, criteria.MaxTileRepeats) : new HashSet<Material>();
+            var byKey = new Dictionary<GroupKey, List<SourcePrim>>();
+            foreach (var sp in prims)
+            {
+                var key = JoinGrouping.KeyOf(sp.Prim.Material, sp.Node, criteria, sp.Prim.Material != null && tiling.Contains(sp.Prim.Material));
+                if (!byKey.TryGetValue(key, out var list)) byKey[key] = list = new();
+                list.Add(sp);
+            }
+            var ordered = byKey.OrderByDescending(kv => kv.Value.Count).ToList();
+            groups = ordered.Select(kv => kv.Value).ToList();
+            groupLabels = ordered.Select(kv => kv.Key.Label).ToList();
+        }
+        else
+        {
+            var skins = prims.Select(p => p.Node.Skin).Distinct().ToList();
+            if (skins.Count > 1)
+                throw new InvalidOperationException(skins.Any(s => s == null)
+                    ? "Selection mixes skinned and rigid meshes; join them separately (or use 'Join per group')."
+                    : "Selection contains meshes bound to different skins; only meshes sharing one skin can be joined into one mesh (use 'Join per group').");
+            groups = new() { prims };
+            groupLabels = new() { "" };
+        }
 
-        // ---- UV bounds per material (with texture transform applied) ---------------------------
+        var consumedNodes = prims.Select(p => p.Node).Distinct().ToList();
+        report.SourceNodes = consumedNodes.Count;
+
+        // ---- build one mesh per group ---------------------------------------------------------------
+        var newNodeNames = new List<string>();
+        for (int gi = 0; gi < groups.Count; gi++)
+        {
+            string name = groups.Count == 1 ? options.Name : $"{options.Name}_{SafeSuffix(groupLabels[gi])}";
+            var gr = BuildGroup(model, groups[gi], options, name, groupLabels[gi]);
+            report.Groups.Add(gr);
+            newNodeNames.Add(name);
+        }
+
+        // ---- detach consumed primitives from their source nodes -------------------------------------
+        var consumedByNode = prims.GroupBy(p => p.Node).ToDictionary(g => g.Key, g => g.Select(p => p.Prim).ToHashSet());
+        var leftoverCache = new Dictionary<string, Mesh>();
+        var clearedNodes = new List<Node>();
+        foreach (var (node, consumed) in consumedByNode)
+        {
+            var mesh = node.Mesh!;
+            var leftover = mesh.Primitives.Where(p => !consumed.Contains(p)).ToList();
+            if (leftover.Count == 0)
+            {
+                node.Mesh = null;
+                node.Skin = null;
+                clearedNodes.Add(node);
+            }
+            else
+            {
+                // keep the node with a new mesh holding only the primitives that were not joined
+                string cacheKey = $"{mesh.LogicalIndex}:{string.Join(",", leftover.Select(p => p.LogicalIndex))}";
+                if (!leftoverCache.TryGetValue(cacheKey, out var newMesh))
+                {
+                    newMesh = CloneMeshSubset(model, mesh, leftover);
+                    leftoverCache[cacheKey] = newMesh;
+                }
+                node.Mesh = newMesh;
+                warnings.Add($"'{Name(node)}': {leftover.Count} primitive(s) were not joined and stay on the node.");
+            }
+        }
+
+        // ---- structural clean-up: drop emptied nodes, prune orphaned resources ------------------------
+        var pkg = GlbPackage.FromModel(model);
+        if (options.RemoveSources && clearedNodes.Count > 0)
+        {
+            var scope = new HashSet<int>();
+            var stop = CommonAncestor(consumedNodes);
+            if (stop != null && consumedNodes.Contains(stop)) stop = stop.VisualParent;
+            foreach (var n in clearedNodes)
+                for (var a = n; a != null && a != stop; a = a.VisualParent) scope.Add(a.LogicalIndex);
+            var removable = CleanEmptyNodes.FindRemovable(model, new CleanEmptyNodesOptions { OnlyNodes = scope, FoldNonIdentityTransforms = false });
+            GltfStructure.RemoveNodes(pkg, removable.Select(n => n.LogicalIndex).ToList(), foldTransforms: false);
+        }
+        var prune = GltfStructure.PruneUnused(pkg);
+        report.PruneSummary = prune.ToString();
+
+        var result = pkg.ToModel();
+        for (int gi = 0; gi < report.Groups.Count; gi++)
+            report.Groups[gi].NewNodeIndex = result.LogicalNodes.FirstOrDefault(n => n.Name == newNodeNames[gi] && n.Mesh != null)?.LogicalIndex ?? -1;
+        return result;
+    }
+
+    // -------------------------------------------------------------------------------------------
+
+    private static JoinGroupReport BuildGroup(ModelRoot model, List<SourcePrim> prims, JoinOptions options, string name, string label)
+    {
+        var gr = new JoinGroupReport { Label = label, NodeName = name };
+        var warnings = gr.Warnings;
+
+        var nodes = prims.Select(p => p.Node).Distinct().ToList();
+        gr.SourceNodes = nodes.Count;
+        var skins = nodes.Select(n => n.Skin).Distinct().ToList();
+        if (skins.Count > 1) throw new InvalidOperationException($"Group '{label}' mixes skins – this should not happen.");
+        var skin = skins[0];
+        bool skinned = skin != null;
+
+        // join parent: below the common ancestor of the group's sources; geometry is baked into its local space
+        var parent = CommonAncestor(nodes);
+        if (parent != null && nodes.Contains(parent)) parent = parent.VisualParent;
+        Matrix4x4.Invert(parent?.WorldMatrix ?? Matrix4x4.Identity, out var parentInverse);
+
+        // usages (materials) + uv transforms
+        var usages = new List<MaterialUsage>();
+        var usageIndex = new Dictionary<Material, int>();
+        int defaultUsage = -1;
+        foreach (var sp in prims)
+        {
+            sp.World = skinned ? Matrix4x4.Identity : sp.Node.WorldMatrix * parentInverse;
+            if (sp.Prim.Material == null)
+            {
+                if (defaultUsage < 0) { defaultUsage = usages.Count; usages.Add(new MaterialUsage { Material = null }); }
+                sp.UsageIndex = defaultUsage;
+            }
+            else if (!usageIndex.TryGetValue(sp.Prim.Material, out sp.UsageIndex))
+            {
+                sp.UsageIndex = usages.Count;
+                usageIndex[sp.Prim.Material] = sp.UsageIndex;
+                usages.Add(new MaterialUsage { Material = sp.Prim.Material });
+            }
+            sp.UvTransform = UvTransformOf(sp.Prim.Material, warnings);
+        }
+
+        // uv bounds per material (after texture transform)
         foreach (var sp in prims)
         {
             var uvAcc = sp.Prim.GetVertexAccessor("TEXCOORD_0");
@@ -135,11 +249,11 @@ public static class JoinMeshes
             foreach (int i in used) usage.Include(Vector2.Transform(uvs[i], sp.UvTransform));
         }
 
-        // ---- extensions the merged (core PBR) material cannot carry --------------------------------
+        // extensions the merged (core PBR) material cannot carry
         foreach (var u in usages)
         {
             if (u.Material == null) continue;
-            var ext = Grouping.JoinGrouping.ExtensionsOf(u.Material);
+            var ext = JoinGrouping.ExtensionsOf(u.Material);
             var mname = string.IsNullOrEmpty(u.Material.Name) ? $"material #{u.Material.LogicalIndex}" : u.Material.Name;
             if (ext.Remove("KHR_materials_pbrSpecularGlossiness"))
                 warnings.Add($"'{mname}': spec-gloss material approximated (diffuse → base colour, metallic 0, roughness = 1 − glossiness).");
@@ -147,23 +261,22 @@ public static class JoinMeshes
                 warnings.Add($"'{mname}': {string.Join(", ", ext.OrderBy(x => x))} not carried over by the merged material.");
         }
 
-        // ---- bake atlas ------------------------------------------------------------------------
+        // atlas
         var atlas = MaterialAtlasBaker.Bake(usages, options.Atlas);
         warnings.AddRange(atlas.Warnings);
-        report.AtlasWidth = atlas.Width;
-        report.AtlasHeight = atlas.Height;
-        report.Channels.AddRange(atlas.Images.Keys.Select(k => k.ToString()));
+        gr.AtlasWidth = atlas.Width;
+        gr.AtlasHeight = atlas.Height;
+        gr.Channels.AddRange(atlas.Images.Keys.Select(k => k.ToString()));
         for (int i = 0; i < usages.Count; i++)
         {
             var c = atlas.Cells[i];
             var mname = usages[i].Material == null ? "<default>" : (string.IsNullOrEmpty(usages[i].Material!.Name) ? $"#{usages[i].Material!.LogicalIndex}" : usages[i].Material!.Name);
-            report.CellTable.Add($"{mname}: {c.Content.W}×{c.Content.H} @ ({c.Content.X},{c.Content.Y})" + (c.Solid ? " solid" : $" repeats {c.RepeatsU}×{c.RepeatsV}") + (c.Clamped ? " CLAMPED" : ""));
+            gr.CellTable.Add($"{mname}: {c.Content.W}×{c.Content.H} @ ({c.Content.X},{c.Content.Y})" + (c.Solid ? " solid" : $" repeats {c.RepeatsU}×{c.RepeatsV}") + (c.Clamped ? " CLAMPED" : ""));
         }
 
-        // ---- merge geometry --------------------------------------------------------------------
+        // geometry
         bool anyColor = prims.Any(p => p.Prim.GetVertexAccessor("COLOR_0") != null);
         bool allTangent = prims.All(p => p.Prim.GetVertexAccessor("TANGENT") != null);
-        bool skinned = skin != null;
         if (skinned && !prims.All(p => p.Prim.GetVertexAccessor("JOINTS_0") != null && p.Prim.GetVertexAccessor("WEIGHTS_0") != null))
             throw new InvalidOperationException("A skinned primitive lacks JOINTS_0/WEIGHTS_0.");
 
@@ -229,17 +342,14 @@ public static class JoinMeshes
             }
         }
 
-        report.SourceNodes = consumedNodes.Count;
-        report.SourcePrimitives = prims.Count;
-        report.SourceMaterials = usages.Count;
-        report.Vertices = positions.Count;
-        report.Triangles = indices.Count / 3;
+        gr.SourcePrimitives = prims.Count;
+        gr.SourceMaterials = usages.Count;
+        gr.Vertices = positions.Count;
+        gr.Triangles = indices.Count / 3;
 
-        // ---- author material -------------------------------------------------------------------
-        var material = CreateMaterial(model, options.Name, atlas);
-
-        // ---- author mesh -----------------------------------------------------------------------
-        var mesh = model.CreateMesh(options.Name);
+        // material + mesh
+        var material = CreateMaterial(model, name, atlas);
+        var mesh = model.CreateMesh(name);
         var newPrim = mesh.CreatePrimitive()
             .WithVertexAccessor("POSITION", positions)
             .WithVertexAccessor("NORMAL", normals)
@@ -254,48 +364,42 @@ public static class JoinMeshes
             newPrim.WithVertexAccessor("WEIGHTS_0", weights!);
         }
 
-        // ---- place node ------------------------------------------------------------------------
-        var scene = model.DefaultScene ?? model.LogicalScenes.First();
-
-        foreach (var n in consumedNodes)
+        // node
+        foreach (var n in nodes)
             for (var a = n; a != null && a != parent; a = a.VisualParent)
                 if (a.IsTransformAnimated) { warnings.Add($"'{Name(a)}' is animated below the join parent; its animation is baked at rest pose into the joined mesh."); break; }
 
-        var newNode = parent != null ? parent.CreateNode(options.Name) : scene.CreateNode(options.Name);
+        var scene = model.DefaultScene ?? model.LogicalScenes.First();
+        var newNode = parent != null ? parent.CreateNode(name) : scene.CreateNode(name);
         newNode.LocalMatrix = Matrix4x4.Identity;
         if (skinned) newNode.Skin = skin;
         newNode.Mesh = mesh;
-        report.NewNodeIndex = newNode.LogicalIndex;
-
-        // ---- detach sources ---------------------------------------------------------------------
-        var toClear = consumedNodes.Except(partiallyConsumed).ToList();
-        foreach (var n in toClear)
-        {
-            n.Mesh = null;
-            n.Skin = null;
-        }
-
-        // ---- structural clean-up: drop emptied nodes, prune orphaned resources -------------------
-        var pkg = GlbPackage.FromModel(model);
-        if (options.RemoveSources)
-        {
-            var scope = new HashSet<int>();
-            foreach (var n in toClear)
-                for (var a = n; a != null && a != parent; a = a.VisualParent) scope.Add(a.LogicalIndex);
-            var removable = CleanEmptyNodes.FindRemovable(model, new CleanEmptyNodesOptions { OnlyNodes = scope, FoldNonIdentityTransforms = false });
-            // an emptied node with a non-identity transform and content children cannot be folded safely; leave it
-            GltfStructure.RemoveNodes(pkg, removable.Select(n => n.LogicalIndex).ToList(), foldTransforms: false);
-        }
-        var prune = GltfStructure.PruneUnused(pkg);
-        report.PruneSummary = prune.ToString();
-
-        var result = pkg.ToModel();
-        // node index of the new node may have shifted; find it by name+mesh
-        report.NewNodeIndex = result.LogicalNodes.FirstOrDefault(n => n.Name == options.Name && n.Mesh != null)?.LogicalIndex ?? -1;
-        return result;
+        return gr;
     }
 
-    // -------------------------------------------------------------------------------------------
+    /// <summary>New mesh containing only the given primitives of <paramref name="src"/> (accessors are shared, not copied).</summary>
+    private static Mesh CloneMeshSubset(ModelRoot model, Mesh src, List<MeshPrimitive> keep)
+    {
+        var mesh = model.CreateMesh(src.Name);
+        mesh.Extras = src.Extras?.DeepClone();
+        foreach (var p in keep)
+        {
+            var np = mesh.CreatePrimitive();
+            np.DrawPrimitiveType = p.DrawPrimitiveType;
+            np.Material = p.Material;
+            foreach (var kv in p.VertexAccessors) np.SetVertexAccessor(kv.Key, kv.Value);
+            if (p.IndexAccessor != null) np.SetIndexAccessor(p.IndexAccessor);
+            for (int t = 0; t < p.MorphTargetsCount; t++) np.SetMorphTargetAccessors(t, p.GetMorphTargetAccessors(t));
+        }
+        if (src.MorphWeights.Count > 0) mesh.SetMorphWeights(src.MorphWeights.ToArray());
+        return mesh;
+    }
+
+    private static string SafeSuffix(string label)
+    {
+        var s = label.Replace(" · ", "_").Replace('/', '-').Replace("#", "").Replace(" ", "");
+        return string.IsNullOrEmpty(s) ? "group" : s;
+    }
 
     private static Material CreateMaterial(ModelRoot model, string name, AtlasResult atlas)
     {

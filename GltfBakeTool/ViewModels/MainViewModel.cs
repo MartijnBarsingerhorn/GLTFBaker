@@ -223,12 +223,17 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand(CanExecute = nameof(HasDocument))]
-    private void Join()
+    private void Join() => RunJoin(perGroup: false);
+
+    [RelayCommand(CanExecute = nameof(HasDocument))]
+    private void JoinPerGroup() => RunJoin(perGroup: true);
+
+    private void RunJoin(bool perGroup)
     {
         var nodes = CheckedNodes().Select(n => n.LogicalIndex).ToList();
         if (nodes.Count == 0)
         {
-            AddLog("Join: check the nodes to join first (checkboxes in the tree).");
+            AddLog("Join: check the nodes to join first (checkboxes in the tree, or click a join group).");
             return;
         }
         var opts = new JoinOptions
@@ -243,17 +248,24 @@ public sealed partial class MainViewModel : ObservableObject
                 Alpha = AlphaPolicy,
                 AlphaCutoff = (float)Math.Clamp(AlphaCutoff, 0, 1),
             },
+            Grouping = perGroup ? Criteria : null,
         };
         JoinReport? report = null;
-        RunOperation("Join", m => JoinMeshes.Run(m, nodes, opts, out report));
+        RunOperation(perGroup ? "Join per group" : "Join", m => JoinMeshes.Run(m, nodes, opts, out report));
         if (report == null) return;
-        foreach (var c in report.CellTable) AddLog("  cell " + c);
+        foreach (var g in report.Groups)
+        {
+            foreach (var c in g.CellTable) AddLog("    cell " + c);
+            foreach (var w in g.Warnings) AddLog("    ! " + w);
+            AddLog("  " + g);
+        }
         foreach (var w in report.Warnings) AddLog("  ! " + w);
         if (report.PruneSummary != null) AddLog("  " + report.PruneSummary);
         AddLog(report.ToString());
-        if (report.NewNodeIndex >= 0)
+        var first = report.Groups.FirstOrDefault(g => g.NewNodeIndex >= 0);
+        if (first != null)
         {
-            var item = AllItems().FirstOrDefault(i => i.Node.LogicalIndex == report.NewNodeIndex);
+            var item = AllItems().FirstOrDefault(i => i.Node.LogicalIndex == first.NewNodeIndex);
             if (item != null) { ExpandTo(item); item.IsSelected = true; SelectedNode = item; }
         }
     }
@@ -351,6 +363,7 @@ public sealed partial class MainViewModel : ObservableObject
         SaveAsCommand.NotifyCanExecuteChanged();
         CleanEmptyCommand.NotifyCanExecuteChanged();
         JoinCommand.NotifyCanExecuteChanged();
+        JoinPerGroupCommand.NotifyCanExecuteChanged();
         if (raiseModelChanged) ModelChanged?.Invoke();
         RecomputeGroups();
     }

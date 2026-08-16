@@ -28,7 +28,8 @@
             <TextBox Text="{Binding AlphaCutoff, UpdateSourceTrigger=PropertyChanged}" Width="34" ToolTip="Alpha cutoff (only used for Mask)"/>
             <TextBlock Text="name" VerticalAlignment="Center" Margin="6,0,2,0"/>
             <TextBox Text="{Binding JoinName, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
-            <Button Content="Join checked" Command="{Binding JoinCommand}" Padding="8,2" FontWeight="Bold" ToolTip="Merge all meshes under the checked nodes into one primitive with one atlased material"/>
+            <Button Content="Join checked" Command="{Binding JoinCommand}" Padding="8,2" FontWeight="Bold" ToolTip="Merge all meshes under the checked nodes into ONE primitive with one atlased material"/>
+            <Button Content="Join per group" Command="{Binding JoinPerGroupCommand}" Padding="8,2" FontWeight="Bold" ToolTip="Merge the checked meshes into one mesh + atlas PER join group (see the Join groups panel and its criteria)"/>
             <Separator/>
             <Button Content="Zoom extents" Click="ZoomExtents_Click" Padding="8,2"/>
         </ToolBar>

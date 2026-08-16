@@ -52,7 +52,7 @@ switch (args[0])
     }
     case "join":
     {
-        // cli join <in> <out> [--nodes 1,2,3] [--atlas 2048] [--jpeg] [--alpha auto|opaque|mask|blend]
+        // cli join <in> <out> [--nodes 1,2,3] [--atlas 2048] [--jpeg] [--alpha auto|opaque|mask|blend] [--per-group [--tiling]]
         var doc = GltfDocument.Load(args[1]);
         var scene = doc.Model.DefaultScene ?? doc.Model.LogicalScenes.First();
         List<int> nodes;
@@ -68,14 +68,20 @@ switch (args[0])
                 MaxAtlasSize = ai >= 0 ? int.Parse(args[ai + 1]) : 4096,
                 JpegForColor = args.Contains("--jpeg"),
                 Alpha = al >= 0 ? Enum.Parse<GltfBakeTool.Core.Atlas.AlphaPolicy>(args[al + 1], ignoreCase: true) : GltfBakeTool.Core.Atlas.AlphaPolicy.Auto,
-            }
+            },
+            Grouping = args.Contains("--per-group") ? new GltfBakeTool.Core.Grouping.GroupCriteria { SplitHighTiling = args.Contains("--tiling") } : null,
         };
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var result = JoinMeshes.Run(doc.Model, nodes, opts, out var report);
         Console.WriteLine($"{report} in {sw.ElapsedMilliseconds} ms");
         Console.WriteLine(report.PruneSummary);
         foreach (var w in report.Warnings) Console.WriteLine("  ! " + w);
-        foreach (var c in report.CellTable) Console.WriteLine("  cell " + c);
+        foreach (var g in report.Groups)
+        {
+            Console.WriteLine("  group " + g);
+            foreach (var w in g.Warnings) Console.WriteLine("    ! " + w);
+            foreach (var c in g.CellTable) Console.WriteLine("    cell " + c);
+        }
         Console.WriteLine("--- after"); PrintInfo(result);
         result.SaveGLB(args[2]);
         return 0;
