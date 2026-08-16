@@ -31,11 +31,13 @@ public sealed class JoinGroupReport
     public int AtlasWidth { get; set; }
     public int AtlasHeight { get; set; }
     public List<string> Channels { get; } = new();
+    /// <summary>Distinct atlas cells (materials with identical textures share one).</summary>
+    public int UniqueCells { get; set; }
     public List<string> CellTable { get; } = new();
     public List<string> Warnings { get; } = new();
     public int NewNodeIndex { get; set; } = -1;
     public override string ToString()
-        => $"'{NodeName}'{(Label.Length > 0 ? $" [{Label}]" : "")}: {SourcePrimitives} primitive(s), {SourceMaterials} material(s) → {Vertices:N0} vertices, {Triangles:N0} triangles, atlas {AtlasWidth}×{AtlasHeight} [{string.Join(", ", Channels)}]"
+        => $"'{NodeName}'{(Label.Length > 0 ? $" [{Label}]" : "")}: {SourcePrimitives} primitive(s), {SourceMaterials} material(s) → {Vertices:N0} vertices, {Triangles:N0} triangles, atlas {AtlasWidth}×{AtlasHeight} ({UniqueCells} cells) [{string.Join(", ", Channels)}]"
          + (Warnings.Count > 0 ? $", {Warnings.Count} warning(s)" : "");
 }
 
@@ -72,6 +74,8 @@ public static class JoinMeshes
         public int UsageIndex;
         public Matrix3x2 UvTransform = Matrix3x2.Identity;
         public List<(int A, int B, int C)> Triangles = new();
+        /// <summary>TEXCOORD_0 after texture transform and per-island integer shifts (null: no UVs).</summary>
+        public Vector2[]? Uvs;
     }
 
     public static ModelRoot Run(ModelRoot model, IReadOnlyCollection<int> nodeIndices, JoinOptions options, out JoinReport report)
@@ -237,16 +241,17 @@ public static class JoinMeshes
             sp.UvTransform = UvTransformOf(sp.Prim.Material, warnings);
         }
 
-        // uv bounds per material (after texture transform)
+        // uv bounds per material (after texture transform and per-island tile normalisation)
         foreach (var sp in prims)
         {
             var uvAcc = sp.Prim.GetVertexAccessor("TEXCOORD_0");
             if (uvAcc == null) continue;
-            var uvs = uvAcc.AsVector2Array();
+            var (allowU, allowV) = RepeatAxes(sp.Prim.Material);
+            sp.Uvs = NormalizeIslands(uvAcc.AsVector2Array(), sp.Triangles, sp.UvTransform, allowU, allowV);
             var usage = usages[sp.UsageIndex];
             var used = new HashSet<int>();
             foreach (var (a, b, c) in sp.Triangles) { used.Add(a); used.Add(b); used.Add(c); }
-            foreach (int i in used) usage.Include(Vector2.Transform(uvs[i], sp.UvTransform));
+            foreach (int i in used) usage.Include(sp.Uvs[i]);
         }
 
         // extensions the merged (core PBR) material cannot carry
@@ -267,11 +272,12 @@ public static class JoinMeshes
         gr.AtlasWidth = atlas.Width;
         gr.AtlasHeight = atlas.Height;
         gr.Channels.AddRange(atlas.Images.Keys.Select(k => k.ToString()));
+        gr.UniqueCells = atlas.Cells.Distinct().Count();
         for (int i = 0; i < usages.Count; i++)
         {
             var c = atlas.Cells[i];
             var mname = usages[i].Material == null ? "<default>" : (string.IsNullOrEmpty(usages[i].Material!.Name) ? $"#{usages[i].Material!.LogicalIndex}" : usages[i].Material!.Name);
-            gr.CellTable.Add($"{mname}: {c.Content.W}×{c.Content.H} @ ({c.Content.X},{c.Content.Y})" + (c.Solid ? " solid" : $" repeats {c.RepeatsU}×{c.RepeatsV}") + (c.Clamped ? " CLAMPED" : ""));
+            gr.CellTable.Add($"{mname}: {c.Content.W}×{c.Content.H} @ ({c.Content.X},{c.Content.Y})" + (c.Solid ? " solid" : $" uv-range {c.RepeatsU:0.##}×{c.RepeatsV:0.##} tiles") + (c.Clamped ? " CLAMPED" : "") + (c.SharedBy > 1 ? $" (shared by {c.SharedBy})" : ""));
         }
 
         // geometry
@@ -301,7 +307,7 @@ public static class JoinMeshes
 
             var cell = atlas.Cells[sp.UsageIndex];
             var srcNrm = sp.Prim.GetVertexAccessor("NORMAL")?.AsVector3Array();
-            var srcUv = sp.Prim.GetVertexAccessor("TEXCOORD_0")?.AsVector2Array();
+            var srcUv = sp.Uvs;
             var srcCol = sp.Prim.GetVertexAccessor("COLOR_0")?.AsColorArray();
             var srcTan = tangents != null ? sp.Prim.GetVertexAccessor("TANGENT")!.AsVector4Array() : null;
             var srcJ = skinned ? sp.Prim.GetVertexAccessor("JOINTS_0")!.AsVector4Array() : null;
@@ -321,7 +327,7 @@ public static class JoinMeshes
                 n = Vector3.TransformNormal(n, normalMatrix);
                 normals.Add(n.LengthSquared() > 0 ? Vector3.Normalize(n) : Vector3.UnitY);
 
-                var uv = srcUv != null ? Vector2.Transform(srcUv[i], sp.UvTransform) : Vector2.Zero;
+                var uv = srcUv != null ? srcUv[i] : Vector2.Zero;
                 uvs0.Add(cell.MapUv(uv, atlas.Width, atlas.Height));
 
                 colors?.Add(srcCol != null ? srcCol[i] : Vector4.One);
@@ -472,6 +478,71 @@ public static class JoinMeshes
             }
         }
         return result;
+    }
+
+    /// <summary>Per axis: may UVs be shifted by whole tiles? Only when every textured channel repeats on that axis.</summary>
+    private static (bool U, bool V) RepeatAxes(Material? m)
+    {
+        if (m == null) return (true, true);
+        bool u = true, v = true, any = false;
+        foreach (var ch in m.Channels)
+        {
+            if (ch.Texture == null) continue;
+            any = true;
+            var s = ch.Texture.Sampler;
+            if ((s?.WrapS ?? TextureWrapMode.REPEAT) != TextureWrapMode.REPEAT) u = false;
+            if ((s?.WrapT ?? TextureWrapMode.REPEAT) != TextureWrapMode.REPEAT) v = false;
+        }
+        return any ? (u, v) : (true, true);
+    }
+
+    /// <summary>
+    /// Applies the texture transform and then shifts every UV island (triangles connected through shared
+    /// vertices) by whole tiles so it sits as close to [0,1] as possible. With REPEAT wrapping this is
+    /// invisible, but it stops islands parked in neighbouring tiles from inflating the atlas cell.
+    /// </summary>
+    private static Vector2[] NormalizeIslands(IReadOnlyList<Vector2> src, List<(int A, int B, int C)> tris, Matrix3x2 xf, bool allowU, bool allowV)
+    {
+        var uv = new Vector2[src.Count];
+        for (int i = 0; i < uv.Length; i++) uv[i] = Vector2.Transform(src[i], xf);
+        if (!allowU && !allowV) return uv;
+
+        var parent = new int[uv.Length];
+        for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+        foreach (var (a, b, c) in tris) { parent[Find(a)] = Find(b); parent[Find(b)] = Find(c); }
+
+        var lo = new Dictionary<int, Vector2>();
+        var hi = new Dictionary<int, Vector2>();
+        foreach (var (a, b, c) in tris)
+            foreach (int i in new[] { a, b, c })
+            {
+                int r = Find(i);
+                lo[r] = lo.TryGetValue(r, out var l) ? Vector2.Min(l, uv[i]) : uv[i];
+                hi[r] = hi.TryGetValue(r, out var h) ? Vector2.Max(h, uv[i]) : uv[i];
+            }
+
+        static float Shift(float l, float h)
+        {
+            // pick the whole-tile shift that leaves the least of [l,h] outside [0,1]
+            float k0 = MathF.Floor(l), best = k0, bestOut = float.MaxValue;
+            for (float k = k0; k <= k0 + 1; k++)
+            {
+                float outside = MathF.Max(0, -(l - k)) + MathF.Max(0, (h - k) - 1);
+                if (outside < bestOut - 1e-6f) { bestOut = outside; best = k; }
+            }
+            return best;
+        }
+
+        var shift = new Dictionary<int, Vector2>();
+        foreach (var (r, l) in lo)
+        {
+            var h = hi[r];
+            shift[r] = new Vector2(allowU ? Shift(l.X, h.X) : 0f, allowV ? Shift(l.Y, h.Y) : 0f);
+        }
+        for (int i = 0; i < uv.Length; i++)
+            if (shift.TryGetValue(Find(i), out var sh)) uv[i] -= sh;
+        return uv;
     }
 
     private static Vector3[] ComputeNormals(IReadOnlyList<Vector3> pos, List<(int A, int B, int C)> tris)

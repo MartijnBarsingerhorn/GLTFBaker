@@ -199,10 +199,8 @@ public static class JoinGrouping
         var result = new HashSet<Material>();
         foreach (var m in min.Keys)
         {
-            const float eps = 1e-3f;
-            int ru = (int)MathF.Ceiling(max[m].X - eps) - (int)MathF.Floor(min[m].X + eps);
-            int rv = (int)MathF.Ceiling(max[m].Y - eps) - (int)MathF.Floor(min[m].Y + eps);
-            if (Math.Max(ru, 1) > maxRepeats || Math.Max(rv, 1) > maxRepeats) result.Add(m);
+            float ru = max[m].X - min[m].X, rv = max[m].Y - min[m].Y;
+            if (ru > maxRepeats || rv > maxRepeats) result.Add(m);
         }
         return result;
     }

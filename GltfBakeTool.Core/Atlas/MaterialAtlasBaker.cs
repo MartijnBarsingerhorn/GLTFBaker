@@ -57,12 +57,16 @@ public sealed class AtlasCell
 {
     public required int UsageIndex { get; init; }
     public PackRect Content { get; set; }
-    public int RepeatsU { get; init; } = 1;
-    public int RepeatsV { get; init; } = 1;
+    /// <summary>Extent of the cell in texture tiles (fractional: cells cover exactly the used UV range).</summary>
+    public float RepeatsU { get; init; } = 1;
+    public float RepeatsV { get; init; } = 1;
+    /// <summary>UV value at the cell's left/top edge.</summary>
     public float OffsetU { get; init; }
     public float OffsetV { get; init; }
     public bool Clamped { get; init; }
     public bool Solid { get; init; }
+    /// <summary>Number of source materials sharing this cell (identical texture content).</summary>
+    public int SharedBy { get; init; } = 1;
 
     /// <summary>Maps a source UV (texture-transform already applied) into atlas UV space.</summary>
     public Vector2 MapUv(Vector2 uv, int atlasW, int atlasH)
@@ -100,9 +104,12 @@ public static class MaterialAtlasBaker
     private sealed class ChannelSource
     {
         public SKBitmap? Bitmap;
+        public int ImageIndex = -1;
         public SKColor Fill;
         public SKColorFilter? Filter;
+        public string FactorSignature = "";
         public SKShaderTileMode WrapS = SKShaderTileMode.Repeat, WrapT = SKShaderTileMode.Repeat;
+        public string Signature => $"{ImageIndex}|{Fill}|{FactorSignature}|{WrapS}{WrapT}";
     }
 
     private sealed class Prepared
@@ -110,10 +117,23 @@ public static class MaterialAtlasBaker
         public required MaterialUsage Usage;
         public Dictionary<AtlasChannel, ChannelSource> Sources = new();
         public int TexW, TexH;          // native size of the largest texture across channels
-        public int RepU = 1, RepV = 1;
-        public float OffU, OffV;
-        public bool Clamped, Solid;
+        public bool Solid;
+        public string Signature = "";
+        public CellSpec Cell = null!;
         public bool Has(AtlasChannel c) => Sources.TryGetValue(c, out var s) && s.Bitmap != null;
+    }
+
+    /// <summary>One atlas cell; several materials with identical texture content share one.</summary>
+    private sealed class CellSpec
+    {
+        public List<Prepared> Members = new();
+        public Prepared Master => Members[0];
+        public float RepU = 1, RepV = 1;
+        public float OffU, OffV;
+        public bool Clamped;
+        public bool Solid => Master.Solid;
+        public int TexW => Master.TexW;
+        public int TexH => Master.TexH;
     }
 
     public static AtlasResult Bake(IReadOnlyList<MaterialUsage> usages, AtlasOptions opt)
@@ -121,6 +141,22 @@ public static class MaterialAtlasBaker
         var warnings = new List<string>();
         var imageCache = new Dictionary<int, SKBitmap?>();
         var prepared = usages.Select(u => Prepare(u, opt, imageCache, warnings)).ToList();
+
+        // ---- one cell per distinct texture content (materials sharing images/factors share a cell) ----
+        var specs = new List<CellSpec>();
+        var specBySig = new Dictionary<string, CellSpec>();
+        foreach (var p in prepared)
+        {
+            if (!specBySig.TryGetValue(p.Signature, out var spec))
+            {
+                spec = new CellSpec();
+                specBySig[p.Signature] = spec;
+                specs.Add(spec);
+            }
+            spec.Members.Add(p);
+            p.Cell = spec;
+        }
+        foreach (var spec in specs) ComputeRange(spec, opt, warnings);
 
         // ---- which channels get an atlas ------------------------------------------------------
         var channels = new List<AtlasChannel> { AtlasChannel.BaseColor };
@@ -147,20 +183,22 @@ public static class MaterialAtlasBaker
 
         // ---- layout ---------------------------------------------------------------------------
         int pad = opt.Padding;
-        var (W, H, rects, scale) = Layout(prepared, opt, warnings);
-        var cells = new AtlasCell[prepared.Count];
-        for (int i = 0; i < prepared.Count; i++)
+        var (W, H, rects, scale) = Layout(specs, opt, warnings);
+        var specCells = new AtlasCell[specs.Count];
+        for (int si = 0; si < specs.Count; si++)
         {
-            var p = prepared[i];
-            var r = rects[i];
-            cells[i] = new AtlasCell
+            var sp = specs[si];
+            var r = rects[si];
+            specCells[si] = new AtlasCell
             {
-                UsageIndex = i,
+                UsageIndex = prepared.IndexOf(sp.Master),
                 Content = new PackRect(r.X + pad, r.Y + pad, r.W - 2 * pad, r.H - 2 * pad),
-                RepeatsU = p.RepU, RepeatsV = p.RepV, OffsetU = p.OffU, OffsetV = p.OffV,
-                Clamped = p.Clamped, Solid = p.Solid,
+                RepeatsU = sp.RepU, RepeatsV = sp.RepV, OffsetU = sp.OffU, OffsetV = sp.OffV,
+                Clamped = sp.Clamped, Solid = sp.Solid, SharedBy = sp.Members.Count,
             };
         }
+        var cells = new AtlasCell[prepared.Count];
+        for (int i = 0; i < prepared.Count; i++) cells[i] = specCells[specs.IndexOf(prepared[i].Cell)];
 
         var result = new AtlasResult { Width = W, Height = H, Cells = cells };
         result.Warnings.AddRange(warnings);
@@ -197,10 +235,11 @@ public static class MaterialAtlasBaker
             using var canvas = new SKCanvas(bmp);
             canvas.Clear(DefaultColor(ch));
 
-            for (int i = 0; i < prepared.Count; i++)
+            for (int si = 0; si < specs.Count; si++)
             {
-                var p = prepared[i];
-                var cell = cells[i];
+                var sp = specs[si];
+                var p = sp.Master;
+                var cell = specCells[si];
                 var padded = SKRect.Create(cell.Content.X - pad, cell.Content.Y - pad, cell.Content.W + 2 * pad, cell.Content.H + 2 * pad);
                 padded.Intersect(SKRect.Create(0, 0, W, H));
 
@@ -209,9 +248,10 @@ public static class MaterialAtlasBaker
 
                 if (src.Bitmap != null)
                 {
-                    float sx = (float)cell.Content.W / (p.RepU * src.Bitmap.Width);
-                    float sy = (float)cell.Content.H / (p.RepV * src.Bitmap.Height);
-                    var matrix = SKMatrix.CreateScaleTranslation(sx, sy, cell.Content.X, cell.Content.Y);
+                    // map texture pixels → atlas pixels: the cell covers uv ∈ [Off, Off+Rep] of the (tiling) texture
+                    float sx = (float)cell.Content.W / (sp.RepU * src.Bitmap.Width);
+                    float sy = (float)cell.Content.H / (sp.RepV * src.Bitmap.Height);
+                    var matrix = SKMatrix.CreateScaleTranslation(sx, sy, cell.Content.X - sp.OffU * src.Bitmap.Width * sx, cell.Content.Y - sp.OffV * src.Bitmap.Height * sy);
                     using var shader = src.Bitmap.ToShader(src.WrapS, src.WrapT, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), matrix);
                     using var paint = new SKPaint { Shader = shader, ColorFilter = src.Filter, IsAntialias = false, BlendMode = SKBlendMode.Src };
                     canvas.DrawRect(padded, paint);
@@ -239,24 +279,24 @@ public static class MaterialAtlasBaker
 
     // -------------------------------------------------------------------------------------------
 
-    private static (int W, int H, PackRect[] rects, float scale) Layout(List<Prepared> prepared, AtlasOptions opt, List<string> warnings)
+    private static (int W, int H, PackRect[] rects, float scale) Layout(List<CellSpec> specs, AtlasOptions opt, List<string> warnings)
     {
         int pad = opt.Padding;
 
-        List<(int, int)> SizesAt(float scale) => prepared.Select(p =>
+        List<(int, int)> SizesAt(float scale) => specs.Select(p =>
         {
-            int w = p.Solid ? opt.SolidCellSize : Math.Max(1, (int)MathF.Round(p.TexW * p.RepU * scale));
-            int h = p.Solid ? opt.SolidCellSize : Math.Max(1, (int)MathF.Round(p.TexH * p.RepV * scale));
+            int w = p.Solid ? opt.SolidCellSize : Math.Max(2, (int)MathF.Ceiling(p.TexW * p.RepU * scale));
+            int h = p.Solid ? opt.SolidCellSize : Math.Max(2, (int)MathF.Ceiling(p.TexH * p.RepV * scale));
             return (w + 2 * pad, h + 2 * pad);
         }).ToList();
 
-        // For each candidate atlas size (smallest first) accept a modest downscale (down to 75%)
-        // before moving on to the next size: a 0.5% shrink beats doubling the atlas.
-        float[] nearScales = { 1f, 0.99f, 0.97f, 0.95f, 0.92f, 0.88f, 0.84f, 0.8f, 0.75f };
+        // For each candidate atlas size (smallest first) accept a modest downscale (down to 90%)
+        // before moving on to the next size: a 1% shrink beats doubling the atlas.
+        float[] nearScales = { 1f, 0.99f, 0.98f, 0.96f, 0.94f, 0.92f, 0.9f };
         long fullArea = SizesAt(1f).Sum(s => (long)s.Item1 * s.Item2);
         foreach (var (W, H) in CandidateSizes(opt.MaxAtlasSize))
         {
-            if ((long)W * H < fullArea * 0.75f * 0.75f) continue;
+            if ((long)W * H < fullArea * 0.9f * 0.9f) continue;
             foreach (var scale in nearScales)
             {
                 var sizes = SizesAt(scale);
@@ -264,14 +304,14 @@ public static class MaterialAtlasBaker
                 var rects = SkylinePacker.PackAll(sizes, W, H);
                 if (rects != null)
                 {
-                    if (scale < 0.9f) warnings.Add($"Textures were downscaled to {scale * 100:0}% to fit a {W}×{H} atlas.");
+                    if (scale < 0.98f) warnings.Add($"Textures were downscaled to {scale * 100:0}% to fit a {W}×{H} atlas.");
                     return (W, H, rects, scale);
                 }
             }
         }
 
         // Nothing fits the largest atlas: keep shrinking.
-        float s2 = 0.75f;
+        float s2 = 0.9f;
         for (int attempt = 0; attempt < 40; attempt++, s2 *= 0.85f)
         {
             var sizes = SizesAt(s2);
@@ -317,25 +357,40 @@ public static class MaterialAtlasBaker
         }
         p.TexW = bitmaps.Max(b => b.Width);
         p.TexH = bitmaps.Max(b => b.Height);
-
-        // UV tiling
-        if (u.HasUvs)
-        {
-            const float eps = 1e-3f;
-            int u0 = (int)MathF.Floor(u.UvMin.X + eps), u1 = (int)MathF.Ceiling(u.UvMax.X - eps);
-            int v0 = (int)MathF.Floor(u.UvMin.Y + eps), v1 = (int)MathF.Ceiling(u.UvMax.Y - eps);
-            int ru = Math.Max(1, u1 - u0), rv = Math.Max(1, v1 - v0);
-            if (ru <= opt.MaxTileRepeats && rv <= opt.MaxTileRepeats)
-            {
-                p.RepU = ru; p.RepV = rv; p.OffU = u0; p.OffV = v0;
-            }
-            else
-            {
-                p.RepU = 1; p.RepV = 1; p.OffU = u0; p.OffV = v0; p.Clamped = true;
-                warnings.Add($"'{mname}': UVs tile {ru}×{rv} times (limit {opt.MaxTileRepeats}); UVs were clamped to a single tile – texture will stretch.");
-            }
-        }
+        p.Signature = string.Join(";", p.Sources.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value.Signature}"));
         return p;
+    }
+
+    /// <summary>Cell extent in UV space: exactly the used range of all members (plus a texel margin), fractional.</summary>
+    private static void ComputeRange(CellSpec spec, AtlasOptions opt, List<string> warnings)
+    {
+        if (spec.Solid) return;
+        var withUvs = spec.Members.Where(m => m.Usage.HasUvs).ToList();
+        if (withUvs.Count == 0) { spec.OffU = 0; spec.OffV = 0; spec.RepU = 1; spec.RepV = 1; return; }
+
+        var lo = new Vector2(float.MaxValue);
+        var hi = new Vector2(float.MinValue);
+        foreach (var m in withUvs) { lo = Vector2.Min(lo, m.Usage.UvMin); hi = Vector2.Max(hi, m.Usage.UvMax); }
+
+        // margin: a couple of source texels on each side so bilinear/mip filtering at the cell edge stays correct
+        float mu = 2f / spec.TexW, mv = 2f / spec.TexH;
+        float spanU = (hi.X - lo.X) + 2 * mu, spanV = (hi.Y - lo.Y) + 2 * mv;
+        spanU = MathF.Max(spanU, 4f / spec.TexW);
+        spanV = MathF.Max(spanV, 4f / spec.TexH);
+
+        string names = string.Join(", ", spec.Members.Select(m => m.Usage.Material == null ? "<default>" : (string.IsNullOrEmpty(m.Usage.Material.Name) ? $"#{m.Usage.Material.LogicalIndex}" : m.Usage.Material.Name)));
+        if (spanU <= opt.MaxTileRepeats && spanV <= opt.MaxTileRepeats)
+        {
+            spec.OffU = lo.X - mu; spec.OffV = lo.Y - mv;
+            spec.RepU = spanU; spec.RepV = spanV;
+        }
+        else
+        {
+            // too much tiling: clamp UVs to the tile that contains the range start
+            spec.OffU = MathF.Floor(lo.X); spec.OffV = MathF.Floor(lo.Y);
+            spec.RepU = 1; spec.RepV = 1; spec.Clamped = true;
+            warnings.Add($"'{names}': UVs span {spanU:0.#}×{spanV:0.#} tiles (limit {opt.MaxTileRepeats}); UVs were clamped to a single tile – texture will stretch.");
+        }
     }
 
     private static void AddChannel(Prepared p, Material? m, AtlasChannel ch, Dictionary<int, SKBitmap?> cache, List<string> warnings, string mname)
@@ -361,6 +416,7 @@ public static class MaterialAtlasBaker
             {
                 var c = channel?.Color ?? Vector4.One;
                 src.Fill = ToSrgb(c);
+                src.FactorSignature = c.ToString();
                 if (c != Vector4.One) src.Filter = SKColorFilter.CreateBlendMode(ToSrgb(c), SKBlendMode.Modulate);
                 break;
             }
@@ -368,6 +424,7 @@ public static class MaterialAtlasBaker
             {
                 float metal = Metallic(m), rough = Roughness(m);
                 src.Fill = new SKColor(255, (byte)Math.Clamp(rough * 255f, 0, 255), (byte)Math.Clamp(metal * 255f, 0, 255));
+                src.FactorSignature = $"{metal}/{rough}";
                 break;
             }
             case AtlasChannel.Normal:
@@ -377,10 +434,12 @@ public static class MaterialAtlasBaker
                 break;
             case AtlasChannel.Occlusion:
                 src.Fill = SKColors.White;
+                if (channel is { } occ) src.FactorSignature = (TryFactor(occ, "OcclusionStrength") ?? 1f).ToString();
                 break;
             case AtlasChannel.Emissive:
             {
                 var e = EmissiveFactor(m);
+                src.FactorSignature = e.ToString();
                 src.Fill = ToSrgb(new Vector4(e, 1));
                 if (e != Vector3.One) src.Filter = SKColorFilter.CreateBlendMode(ToSrgb(new Vector4(e, 1)), SKBlendMode.Modulate);
                 if (channel is { } ec && TryFactor(ec, "EmissiveStrength") is { } es && MathF.Abs(es - 1f) > 1e-3f)
@@ -420,6 +479,7 @@ public static class MaterialAtlasBaker
         }
 
         src.Bitmap = bmp;
+        src.ImageIndex = img.LogicalIndex;
         var sampler = tex.Sampler;
         src.WrapS = Wrap(sampler?.WrapS ?? TextureWrapMode.REPEAT);
         src.WrapT = Wrap(sampler?.WrapT ?? TextureWrapMode.REPEAT);

@@ -45,8 +45,12 @@ checked subtrees. Candidates are shown grey/italic in the tree beforehand.
    skipped with a warning). Rigid meshes are baked into the join parent's local space (world matrix,
    inverse-transpose for normals, winding flipped for mirrored transforms). Skinned meshes must all
    share one skin; their geometry stays in bind space and JOINTS_0/WEIGHTS_0 are carried over.
-2. Per source material: UV bounds (after `KHR_texture_transform`) → tiling repeats. Repeats up to
-   *max repeats* are baked into the cell; beyond that UVs are clamped (warning).
+2. Per source material: UVs get the `KHR_texture_transform` applied and every UV *island* (triangles
+   connected through shared vertices) is shifted by whole tiles towards [0,1] (invisible with REPEAT
+   wrapping, but it stops islands parked in neighbouring tiles from inflating the cell). The cell then
+   covers exactly the used UV range (fractional, plus a texel margin) – unused texture area is cropped
+   and real wrap-around is baked as repeats. Ranges above *max repeats* tiles are clamped (warning).
+   Materials with identical texture content (same images, factors, wrap modes) share one cell.
 3. `MaterialAtlasBaker`: one cell per material, same layout for every channel
    (BaseColor, MetallicRoughness, Normal, Occlusion, Emissive). Missing textures are filled from
    factors; factors are multiplied into pixels so the merged material uses factor 1. Cells get

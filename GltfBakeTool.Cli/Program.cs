@@ -100,6 +100,43 @@ switch (args[0])
         }
         return 0;
     }
+    case "uvstats":
+    {
+        // per material: uv bounds over all prims, and per primitive
+        var doc = GltfDocument.Load(args[1]);
+        var byMat = new Dictionary<int, List<string>>();
+        foreach (var node in doc.Model.LogicalNodes.Where(n => n.Mesh != null))
+            foreach (var prim in node.Mesh!.Primitives)
+            {
+                var m = prim.Material; if (m == null) continue;
+                var uvAcc = prim.GetVertexAccessor("TEXCOORD_0"); if (uvAcc == null) continue;
+                var uvs = uvAcc.AsVector2Array();
+                var used = new HashSet<int>();
+                foreach (var (a, b, c) in prim.GetTriangleIndices()) { used.Add(a); used.Add(b); used.Add(c); }
+                var lo = new System.Numerics.Vector2(float.MaxValue); var hi = new System.Numerics.Vector2(float.MinValue);
+                foreach (int i in used) { lo = System.Numerics.Vector2.Min(lo, uvs[i]); hi = System.Numerics.Vector2.Max(hi, uvs[i]); }
+                // UV islands: connected components over shared vertex indices; each island shifted by floor(min)
+                var tris = prim.GetTriangleIndices().ToList();
+                var parent = new int[uvs.Count]; for (int i = 0; i < parent.Length; i++) parent[i] = i;
+                int Find(int x) { while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+                foreach (var (a, b, c) in tris) { parent[Find(a)] = Find(b); parent[Find(b)] = Find(c); }
+                var isl = new Dictionary<int, (System.Numerics.Vector2 lo, System.Numerics.Vector2 hi)>();
+                foreach (int i in used) { int r = Find(i); var cur = isl.TryGetValue(r, out var e) ? e : (new System.Numerics.Vector2(float.MaxValue), new System.Numerics.Vector2(float.MinValue)); isl[r] = (System.Numerics.Vector2.Min(cur.Item1, uvs[i]), System.Numerics.Vector2.Max(cur.Item2, uvs[i])); }
+                var ulo = new System.Numerics.Vector2(float.MaxValue); var uhi = new System.Numerics.Vector2(float.MinValue);
+                foreach (var (l0, h0) in isl.Values) { var sh = new System.Numerics.Vector2(MathF.Floor(l0.X + 1e-3f), MathF.Floor(l0.Y + 1e-3f)); ulo = System.Numerics.Vector2.Min(ulo, l0 - sh); uhi = System.Numerics.Vector2.Max(uhi, h0 - sh); }
+                if (!byMat.TryGetValue(m.LogicalIndex, out var l)) byMat[m.LogicalIndex] = l = new();
+                l.Add($"      {node.Name,-28} u[{lo.X,7:0.000},{hi.X,7:0.000}] v[{lo.Y,7:0.000},{hi.Y,7:0.000}]  islands={isl.Count,4} shifted-union u[{ulo.X,6:0.000},{uhi.X,6:0.000}] v[{ulo.Y,6:0.000},{uhi.Y,6:0.000}]");
+            }
+        foreach (var (mi, lines) in byMat)
+        {
+            var m = doc.Model.LogicalMaterials[mi];
+            bool textured = m.Channels.Any(c => c.Texture != null);
+            if (!textured && !args.Contains("--all")) continue;
+            Console.WriteLine($"#{mi} '{m.Name}' {(textured ? "" : "(untextured)")}");
+            foreach (var line in lines) Console.WriteLine(line);
+        }
+        return 0;
+    }
     case "materials":
     {
         var doc = GltfDocument.Load(args[1]);
