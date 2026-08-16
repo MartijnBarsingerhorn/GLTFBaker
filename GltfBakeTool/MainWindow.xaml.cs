@@ -19,7 +19,8 @@ public partial class MainWindow : Window
         _vm.ModelChanged += () => { _viewer.Load(_vm.Document?.Model); UpdateProps(); };
         _vm.SelectionChanged += () =>
         {
-            _viewer.SetHighlights(_vm.SelectedNode?.Node, _vm.CheckedNodes());
+            _viewer.SetHighlights(_vm.SelectedNode?.Node, _vm.CheckedNodes(),
+                _vm.ColorByGroup ? _vm.PrimitiveGroupColors : null);
             UpdateProps();
         };
 
@@ -32,6 +33,13 @@ public partial class MainWindow : Window
         => _vm.SelectedNode = e.NewValue as NodeItem;
 
     private void ZoomExtents_Click(object sender, RoutedEventArgs e) => _viewer.ZoomExtents();
+
+    private void GroupItem_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is GroupItem g) _vm.SelectGroupCommand.Execute(g);
+    }
+
+    private void GroupList_MouseDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e) { }
 
     private void Preview_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {

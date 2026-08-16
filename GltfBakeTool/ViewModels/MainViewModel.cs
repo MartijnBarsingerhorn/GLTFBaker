@@ -3,6 +3,7 @@ using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using GltfBakeTool.Core;
+using GltfBakeTool.Core.Grouping;
 using GltfBakeTool.Core.Operations;
 using GltfBakeTool.Core.Scene;
 using Microsoft.Win32;
@@ -33,6 +34,102 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Texture previews for the selected node's material(s).</summary>
     public ObservableCollection<TexturePreview> TexturePreviews { get; } = new();
+
+    // ---- join groups ----
+    public ObservableCollection<GroupItem> Groups { get; } = new();
+    [ObservableProperty] private bool _splitBlend = true;
+    [ObservableProperty] private bool _splitMaskFromOpaque;
+    [ObservableProperty] private bool _splitUnlit = true;
+    [ObservableProperty] private bool _splitTransmission = true;
+    [ObservableProperty] private bool _splitClearcoat = true;
+    [ObservableProperty] private bool _splitOtherExtensions;
+    [ObservableProperty] private bool _splitUvSet = true;
+    [ObservableProperty] private bool _splitHighTiling;
+    [ObservableProperty] private bool _splitDoubleSided;
+    /// <summary>Tint meshes in the viewport by join group.</summary>
+    [ObservableProperty] private bool _colorByGroup;
+
+    public GroupCriteria Criteria => new()
+    {
+        SplitBlend = SplitBlend,
+        SplitMaskFromOpaque = SplitMaskFromOpaque,
+        SplitUnlit = SplitUnlit,
+        SplitTransmission = SplitTransmission,
+        SplitClearcoat = SplitClearcoat,
+        SplitOtherExtensions = SplitOtherExtensions,
+        SplitUvSet = SplitUvSet,
+        SplitHighTiling = SplitHighTiling,
+        MaxTileRepeats = Math.Max(1, MaxTileRepeats),
+        SplitDoubleSided = SplitDoubleSided,
+    };
+
+    /// <summary>Group colour per primitive (for the viewport) – rebuilt with the groups.</summary>
+    public Dictionary<MeshPrimitive, System.Windows.Media.Color> PrimitiveGroupColors { get; } = new();
+
+    partial void OnSplitBlendChanged(bool value) => RecomputeGroups();
+    partial void OnSplitMaskFromOpaqueChanged(bool value) => RecomputeGroups();
+    partial void OnSplitUnlitChanged(bool value) => RecomputeGroups();
+    partial void OnSplitTransmissionChanged(bool value) => RecomputeGroups();
+    partial void OnSplitClearcoatChanged(bool value) => RecomputeGroups();
+    partial void OnSplitOtherExtensionsChanged(bool value) => RecomputeGroups();
+    partial void OnSplitUvSetChanged(bool value) => RecomputeGroups();
+    partial void OnSplitHighTilingChanged(bool value) => RecomputeGroups();
+    partial void OnSplitDoubleSidedChanged(bool value) => RecomputeGroups();
+    partial void OnMaxTileRepeatsChanged(int value) { if (SplitHighTiling) RecomputeGroups(); }
+    partial void OnColorByGroupChanged(bool value) => SelectionChanged?.Invoke();
+
+    /// <summary>Recomputes the join groups for the whole scene and refreshes tree badges + viewport colours.</summary>
+    public void RecomputeGroups()
+    {
+        Groups.Clear();
+        PrimitiveGroupColors.Clear();
+        var byNode = new Dictionary<Node, List<GroupItem>>();
+        if (Document != null)
+        {
+            var scene = Document.Model.DefaultScene ?? Document.Model.LogicalScenes.FirstOrDefault();
+            var scope = scene?.VisualChildren.SelectMany(GeometryExtractor.Flatten);
+            foreach (var g in JoinGrouping.Compute(Document.Model, Criteria, scope))
+            {
+                var item = new GroupItem { Group = g, Color = GroupItem.ColorFor(g.Index) };
+                Groups.Add(item);
+                foreach (var (node, prim) in g.Primitives)
+                {
+                    PrimitiveGroupColors[prim] = item.Color;
+                    if (!byNode.TryGetValue(node, out var list)) byNode[node] = list = new();
+                    if (!list.Contains(item)) list.Add(item);
+                }
+            }
+        }
+        foreach (var it in AllItems())
+        {
+            if (byNode.TryGetValue(it.Node, out var list))
+            {
+                if (list.Count == 1)
+                {
+                    it.GroupBrush = list[0].Brush;
+                    it.GroupToolTip = $"Join group {list[0].Index}: {list[0].Label}";
+                }
+                else
+                {
+                    it.GroupBrush = System.Windows.Media.Brushes.LightGray;
+                    it.GroupToolTip = "Primitives in several join groups: " + string.Join(", ", list.Select(g => $"{g.Index} ({g.Label})"));
+                }
+            }
+            else { it.GroupBrush = null; it.GroupToolTip = null; }
+        }
+        SelectionChanged?.Invoke();
+    }
+
+    /// <summary>Checks exactly the nodes of a group (unchecks everything else).</summary>
+    [RelayCommand]
+    private void SelectGroup(GroupItem? group)
+    {
+        if (group == null) return;
+        foreach (var it in AllItems()) it.IsChecked = false;
+        foreach (var it in AllItems())
+            if (group.Group.Nodes.Contains(it.Node)) it.IsChecked = true;
+        AddLog($"Checked {group.Group.Nodes.Count} node(s) of group {group.Index} ({group.Label}).");
+    }
 
     public CleanEmptyNodesOptions CleanOptions => new()
     {
@@ -255,6 +352,7 @@ public sealed partial class MainViewModel : ObservableObject
         CleanEmptyCommand.NotifyCanExecuteChanged();
         JoinCommand.NotifyCanExecuteChanged();
         if (raiseModelChanged) ModelChanged?.Invoke();
+        RecomputeGroups();
     }
 
     private void Hook(NodeItem item)

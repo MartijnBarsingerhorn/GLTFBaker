@@ -111,15 +111,23 @@ public sealed class SceneViewer
 
     public void ZoomExtents() => _viewport.ZoomExtents(300);
 
-    public void SetHighlights(Node? selected, IReadOnlyCollection<Node> checkedNodes)
+    /// <param name="groupColors">When set, every primitive is tinted with its join-group colour (selection/check tints win).</param>
+    public void SetHighlights(Node? selected, IReadOnlyCollection<Node> checkedNodes,
+        IReadOnlyDictionary<MeshPrimitive, System.Windows.Media.Color>? groupColors = null)
     {
         var checkedSet = new HashSet<Node>(checkedNodes);
         foreach (var (node, list) in _byNode)
         {
-            Color4? tint = null;
-            if (selected != null && IsSelfOrDescendant(node, selected)) tint = SelectedTint;
-            else if (checkedSet.Contains(node)) tint = CheckedTint;
-            foreach (var el in list) el.Material = tint is { } t ? Tinted(_baseMaterial[el], t) : _baseMaterial[el];
+            Color4? nodeTint = null;
+            if (selected != null && IsSelfOrDescendant(node, selected)) nodeTint = SelectedTint;
+            else if (checkedSet.Contains(node)) nodeTint = CheckedTint;
+            foreach (var el in list)
+            {
+                Color4? tint = nodeTint;
+                if (tint == null && groupColors != null && el.Tag is PrimitiveGeometry g && groupColors.TryGetValue(g.Primitive, out var c))
+                    tint = new Color4(c.R / 255f, c.G / 255f, c.B / 255f, 1f);
+                el.Material = tint is { } t ? Tinted(_baseMaterial[el], t) : _baseMaterial[el];
+            }
         }
     }
 

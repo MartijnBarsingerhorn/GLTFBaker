@@ -44,8 +44,14 @@
                 <ColumnDefinition Width="300" MinWidth="200"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Node tree -->
-            <DockPanel Grid.Column="0">
+            <!-- Node tree + join groups -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="4"/>
+                    <RowDefinition Height="260" MinHeight="120"/>
+                </Grid.RowDefinitions>
+            <DockPanel Grid.Row="0">
                 <TextBlock DockPanel.Dock="Top" Text="Scene nodes" FontWeight="Bold" Margin="6,4"/>
                 <TreeView x:Name="NodeTree" ItemsSource="{Binding RootNodes}" SelectedItemChanged="NodeTree_SelectedItemChanged">
                     <TreeView.ItemContainerStyle>
@@ -58,6 +64,18 @@
                         <HierarchicalDataTemplate DataType="{x:Type vm:NodeItem}" ItemsSource="{Binding Children}">
                             <StackPanel Orientation="Horizontal">
                                 <CheckBox IsChecked="{Binding IsChecked, Mode=TwoWay}" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <Border Width="10" Height="10" CornerRadius="2" Margin="0,0,4,0" VerticalAlignment="Center"
+                                        Background="{Binding GroupBrush}" ToolTip="{Binding GroupToolTip}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding GroupBrush}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                </Border>
                                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
@@ -76,6 +94,48 @@
                     </TreeView.ItemTemplate>
                 </TreeView>
             </DockPanel>
+            <GridSplitter Grid.Row="1" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+            <DockPanel Grid.Row="2">
+                <TextBlock DockPanel.Dock="Top" Text="Join groups" FontWeight="Bold" Margin="6,4"
+                           ToolTip="Primitives are grouped by properties one merged material cannot express per part. Click a group to check its nodes."/>
+                <WrapPanel DockPanel.Dock="Top" Margin="4,0,4,2">
+                    <WrapPanel.Resources>
+                        <Style TargetType="CheckBox">
+                            <Setter Property="Margin" Value="0,0,8,2"/>
+                            <Setter Property="FontSize" Value="11"/>
+                        </Style>
+                    </WrapPanel.Resources>
+                    <CheckBox Content="blend" IsChecked="{Binding SplitBlend}" ToolTip="Blended materials in their own group"/>
+                    <CheckBox Content="mask≠opaque" IsChecked="{Binding SplitMaskFromOpaque}" ToolTip="Also keep MASK apart from OPAQUE"/>
+                    <CheckBox Content="unlit" IsChecked="{Binding SplitUnlit}"/>
+                    <CheckBox Content="transmission" IsChecked="{Binding SplitTransmission}" ToolTip="KHR_materials_transmission / volume (glass)"/>
+                    <CheckBox Content="clearcoat" IsChecked="{Binding SplitClearcoat}" ToolTip="KHR_materials_clearcoat (car paint)"/>
+                    <CheckBox Content="other ext" IsChecked="{Binding SplitOtherExtensions}" ToolTip="Sheen, specular, iridescence, anisotropy, IOR"/>
+                    <CheckBox Content="uv1+" IsChecked="{Binding SplitUvSet}" ToolTip="Textures on TEXCOORD_1 or higher (cannot be atlased)"/>
+                    <CheckBox Content="tiled" IsChecked="{Binding SplitHighTiling}" ToolTip="UV tiling above 'max repeats' (would be clamped)"/>
+                    <CheckBox Content="2-sided" IsChecked="{Binding SplitDoubleSided}"/>
+                    <CheckBox Content="colour viewport by group" IsChecked="{Binding ColorByGroup}" FontWeight="SemiBold"/>
+                </WrapPanel>
+                <ListBox ItemsSource="{Binding Groups}" BorderThickness="0" HorizontalContentAlignment="Stretch"
+                         MouseDoubleClick="GroupList_MouseDoubleClick" SelectionMode="Single">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="ToolTip" Value="{Binding ToolTip}"/>
+                            <EventSetter Event="PreviewMouseLeftButtonUp" Handler="GroupItem_Click"/>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <DockPanel Margin="0,1">
+                                <Border Width="14" Height="14" CornerRadius="3" Background="{Binding Brush}" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <TextBlock DockPanel.Dock="Right" Text="{Binding Counts}" Foreground="Gray" FontSize="11" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                <TextBlock Text="{Binding Label}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+            </Grid>
             <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch"/>
 
             <!-- Viewport -->
