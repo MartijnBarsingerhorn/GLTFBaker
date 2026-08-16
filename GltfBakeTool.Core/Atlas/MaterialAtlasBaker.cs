@@ -24,8 +24,8 @@ public sealed record AtlasOptions
     public int Padding { get; init; } = 4;
     /// <summary>UV tiling up to this many repeats per axis is baked into the cell; beyond it UVs are clamped (with a warning).</summary>
     public int MaxTileRepeats { get; init; } = 4;
-    /// <summary>Cell size for materials without any texture.</summary>
-    public int SolidCellSize { get; init; } = 8;
+    /// <summary>Cell size for materials without any texture (large enough that coarse mip levels stay clean).</summary>
+    public int SolidCellSize { get; init; } = 16;
     public bool IncludeMetallicRoughness { get; init; } = true;
     public bool IncludeNormal { get; init; } = true;
     public bool IncludeOcclusion { get; init; } = true;
@@ -349,6 +349,9 @@ public static class MaterialAtlasBaker
         if (opt.IncludeOcclusion) AddChannel(p, m, AtlasChannel.Occlusion, cache, warnings, mname);
         if (opt.IncludeEmissive) AddChannel(p, m, AtlasChannel.Emissive, cache, warnings, mname);
 
+        // content signature: materials with identical channel content share one atlas cell
+        p.Signature = string.Join(";", p.Sources.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value.Signature}"));
+
         var bitmaps = p.Sources.Values.Where(s => s.Bitmap != null).Select(s => s.Bitmap!).ToList();
         if (bitmaps.Count == 0)
         {
@@ -357,7 +360,6 @@ public static class MaterialAtlasBaker
         }
         p.TexW = bitmaps.Max(b => b.Width);
         p.TexH = bitmaps.Max(b => b.Height);
-        p.Signature = string.Join(";", p.Sources.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value.Signature}"));
         return p;
     }
 
