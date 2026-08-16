@@ -19,7 +19,7 @@ public partial class MainWindow : Window
         _vm.ModelChanged += () => { _viewer.Load(_vm.Document?.Model); UpdateProps(); };
         _vm.SelectionChanged += () =>
         {
-            _viewer.SetHighlights(_vm.SelectedNode?.Node, _vm.CheckedNodes(),
+            _viewer.SetHighlights(_vm.SelectedNode?.Node, _vm.TintChecked ? _vm.CheckedNodes() : Array.Empty<SharpGLTF.Schema2.Node>(),
                 _vm.ColorByGroup ? _vm.PrimitiveGroupColors : null);
             UpdateProps();
         };
@@ -36,7 +36,6 @@ public partial class MainWindow : Window
     private void TreeViewItem_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
         if (sender is not System.Windows.Controls.TreeViewItem tvi || tvi.DataContext is not NodeItem item) return;
-        if (e.ClickCount != 1) return;
         // ignore clicks on the checkbox or the expander toggle
         for (var d = e.OriginalSource as DependencyObject; d != null && d != tvi; d = System.Windows.Media.VisualTreeHelper.GetParent(d))
             if (d is System.Windows.Controls.CheckBox || d is System.Windows.Controls.Primitives.ToggleButton) return;
@@ -45,10 +44,29 @@ public partial class MainWindow : Window
 
         if (item.IsSelected)
         {
-            item.IsSelected = false;
-            _vm.SelectedNode = null;
+            ClearSelection();
             e.Handled = true;
         }
+    }
+
+    private void ClearSelection()
+    {
+        if (_vm.SelectedNode is { } sel) sel.IsSelected = false;
+        _vm.SelectedNode = null;
+        // move keyboard focus off the item: a focused TreeViewItem re-selects itself when focus returns
+        NodeTree.Focus();
+    }
+
+    /// <summary>Clicking the empty area of the tree (below the items) clears the selection.</summary>
+    private void NodeTree_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        for (var d = e.OriginalSource as DependencyObject; d != null; d = System.Windows.Media.VisualTreeHelper.GetParent(d))
+        {
+            if (d is System.Windows.Controls.TreeViewItem) return;              // handled by the item handler
+            if (d is System.Windows.Controls.Primitives.ScrollBar) return;      // scrollbar clicks
+            if (d == NodeTree) break;
+        }
+        if (_vm.SelectedNode != null) { ClearSelection(); e.Handled = true; }
     }
 
     private static bool IsWithinHeader(System.Windows.Controls.TreeViewItem tvi, DependencyObject? source)
@@ -65,8 +83,7 @@ public partial class MainWindow : Window
     private void NodeTree_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Escape) return;
-        if (_vm.SelectedNode is { } sel) sel.IsSelected = false;
-        _vm.SelectedNode = null;
+        ClearSelection();
         e.Handled = true;
     }
 

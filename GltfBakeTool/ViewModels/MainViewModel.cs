@@ -48,6 +48,9 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _splitDoubleSided;
     /// <summary>Tint meshes in the viewport by join group.</summary>
     [ObservableProperty] private bool _colorByGroup;
+    /// <summary>Tint checked nodes (blue) in the viewport.</summary>
+    [ObservableProperty] private bool _tintChecked = true;
+    partial void OnTintCheckedChanged(bool value) => SelectionChanged?.Invoke();
 
     public GroupCriteria Criteria => new()
     {
@@ -246,7 +249,7 @@ public sealed partial class MainViewModel : ObservableObject
             Grouping = perGroup ? Criteria : null,
         };
         JoinReport? report = null;
-        RunOperation(perGroup ? "Join per group" : "Join", m => JoinMeshes.Run(m, nodes, opts, out report));
+        RunOperation(perGroup ? "Join per group" : "Join", m => JoinMeshes.Run(m, nodes, opts, out report), keepChecks: false);
         if (report == null) return;
         foreach (var g in report.Groups)
         {
@@ -293,7 +296,8 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>Run a model-mutating operation with an undo snapshot.</summary>
-    public void RunOperation(string name, Func<ModelRoot, ModelRoot> op)
+    /// <param name="keepChecks">Restore the checked nodes afterwards (false: the checks served their purpose, clear them).</param>
+    public void RunOperation(string name, Func<ModelRoot, ModelRoot> op, bool keepChecks = true)
     {
         if (Document == null) return;
         try
@@ -301,6 +305,7 @@ public sealed partial class MainViewModel : ObservableObject
             _undo.Push(Document.Snapshot());
             var result = op(Document.Model);
             Document.Replace(result);
+            if (!keepChecks) foreach (var it in AllItems()) it.IsChecked = false;
             RebuildTree();
             AddLog($"{name}: done. {Describe(result)}");
             Status = Describe(result);

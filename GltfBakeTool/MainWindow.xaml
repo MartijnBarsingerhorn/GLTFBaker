@@ -53,9 +53,13 @@
                     <RowDefinition Height="260" MinHeight="120"/>
                 </Grid.RowDefinitions>
             <DockPanel Grid.Row="0">
-                <TextBlock DockPanel.Dock="Top" Text="Scene nodes" FontWeight="Bold" Margin="6,4"/>
+                <DockPanel DockPanel.Dock="Top" Margin="6,4">
+                    <CheckBox DockPanel.Dock="Right" Content="tint checked" IsChecked="{Binding TintChecked}" FontSize="11" VerticalAlignment="Center"
+                              ToolTip="Tint checked nodes blue in the viewport (selected node is always tinted orange; click it again or press Esc to deselect)"/>
+                    <TextBlock Text="Scene nodes" FontWeight="Bold"/>
+                </DockPanel>
                 <TreeView x:Name="NodeTree" ItemsSource="{Binding RootNodes}" SelectedItemChanged="NodeTree_SelectedItemChanged"
-                          KeyDown="NodeTree_KeyDown">
+                          KeyDown="NodeTree_KeyDown" PreviewMouseLeftButtonDown="NodeTree_PreviewMouseLeftButtonDown">
                     <TreeView.ItemContainerStyle>
                         <Style TargetType="TreeViewItem">
                             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
