@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -118,14 +118,61 @@ public sealed partial class MainViewModel : ObservableObject
         SelectionChanged?.Invoke();
     }
 
+    /// <summary>Ctrl+A: checks every node; when all are already checked, unchecks them instead.</summary>
+    [RelayCommand(CanExecute = nameof(HasDocument))]
+    private void CheckAll()
+    {
+        var items = AllItems().ToList();
+        if (items.Count == 0) return;
+        var check = items.Any(i => !i.IsChecked);
+        SetAllChecked(items, check);
+        AddLog(check ? $"Checked all {items.Count} node(s)." : "Unchecked all nodes.");
+    }
+
+    /// <summary>Ctrl+Shift+A: unchecks every node.</summary>
+    [RelayCommand(CanExecute = nameof(HasDocument))]
+    private void UncheckAll()
+    {
+        SetAllChecked(AllItems().ToList(), false);
+        AddLog("Unchecked all nodes.");
+    }
+
+    private void SetAllChecked(IReadOnlyList<NodeItem> items, bool value)
+    {
+        // parents cascade to children via OnIsCheckedChanged; setting every item explicitly is still needed
+        // for the descending case (a checked child under an unchecked parent) and is cheap.
+        using (BatchChecks())
+            foreach (var it in items) it.IsChecked = value;
+    }
+
+    private int _checkBatchDepth;
+
+    /// <summary>Suppresses the per-item <see cref="SelectionChanged"/> while many checks change; fires it once on dispose.</summary>
+    private IDisposable BatchChecks()
+    {
+        _checkBatchDepth++;
+        return new BatchScope(this);
+    }
+
+    private sealed class BatchScope(MainViewModel vm) : IDisposable
+    {
+        public void Dispose()
+        {
+            if (--vm._checkBatchDepth == 0) vm.SelectionChanged?.Invoke();
+        }
+    }
+
     /// <summary>Checks exactly the nodes of a group (unchecks everything else).</summary>
     [RelayCommand]
     private void SelectGroup(GroupItem? group)
     {
         if (group == null) return;
-        foreach (var it in AllItems()) it.IsChecked = false;
-        foreach (var it in AllItems())
-            if (group.Group.Nodes.Contains(it.Node)) it.IsChecked = true;
+        using (BatchChecks())
+        {
+            foreach (var it in AllItems()) it.IsChecked = false;
+            foreach (var it in AllItems())
+                if (group.Group.Nodes.Contains(it.Node)) it.IsChecked = true;
+        }
         AddLog($"Checked {group.Group.Nodes.Count} node(s) of group {group.Index} ({group.Label}).");
     }
 
@@ -364,13 +411,15 @@ public sealed partial class MainViewModel : ObservableObject
         CleanEmptyCommand.NotifyCanExecuteChanged();
         JoinCommand.NotifyCanExecuteChanged();
         JoinPerGroupCommand.NotifyCanExecuteChanged();
+        CheckAllCommand.NotifyCanExecuteChanged();
+        UncheckAllCommand.NotifyCanExecuteChanged();
         if (raiseModelChanged) ModelChanged?.Invoke();
         RecomputeGroups();
     }
 
     private void Hook(NodeItem item)
     {
-        item.CheckedChanged += _ => SelectionChanged?.Invoke();
+        item.CheckedChanged += _ => { if (_checkBatchDepth == 0) SelectionChanged?.Invoke(); };
         foreach (var c in item.Children) Hook(c);
     }
 

@@ -1,10 +1,14 @@
-<Window x:Class="GltfBakeTool.MainWindow"
+﻿<Window x:Class="GltfBakeTool.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:hx="http://helix-toolkit.org/wpf/SharpDX"
         xmlns:vm="clr-namespace:GltfBakeTool.ViewModels"
         Title="{Binding Title}" Height="800" Width="1300"
         AllowDrop="True" Drop="Window_Drop">
+    <Window.InputBindings>
+        <KeyBinding Gesture="Ctrl+A" Command="{Binding CheckAllCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+A" Command="{Binding UncheckAllCommand}"/>
+    </Window.InputBindings>
     <DockPanel>
         <ToolBar DockPanel.Dock="Top">
             <Button Content="Open…" Command="{Binding OpenCommand}" Padding="8,2"/>
@@ -56,7 +60,7 @@
                 <DockPanel DockPanel.Dock="Top" Margin="6,4">
                     <CheckBox DockPanel.Dock="Right" Content="tint checked" IsChecked="{Binding TintChecked}" FontSize="11" VerticalAlignment="Center"
                               ToolTip="Tint checked nodes blue in the viewport (selected node is always tinted orange; click it again or press Esc to deselect)"/>
-                    <TextBlock Text="Scene nodes" FontWeight="Bold"/>
+                    <TextBlock Text="Scene nodes" FontWeight="Bold" ToolTip="Ctrl+A checks all nodes (again: unchecks all), Ctrl+Shift+A unchecks all"/>
                 </DockPanel>
                 <TreeView x:Name="NodeTree" ItemsSource="{Binding RootNodes}" SelectedItemChanged="NodeTree_SelectedItemChanged"
                           KeyDown="NodeTree_KeyDown" PreviewMouseLeftButtonDown="NodeTree_PreviewMouseLeftButtonDown">
