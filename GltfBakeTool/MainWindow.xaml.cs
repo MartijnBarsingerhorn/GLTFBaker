@@ -32,6 +32,44 @@ public partial class MainWindow : Window
     private void NodeTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
         => _vm.SelectedNode = e.NewValue as NodeItem;
 
+    /// <summary>Clicking the already-selected item deselects it (clears the viewer highlight).</summary>
+    private void TreeViewItem_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TreeViewItem tvi || tvi.DataContext is not NodeItem item) return;
+        if (e.ClickCount != 1) return;
+        // ignore clicks on the checkbox or the expander toggle
+        for (var d = e.OriginalSource as DependencyObject; d != null && d != tvi; d = System.Windows.Media.VisualTreeHelper.GetParent(d))
+            if (d is System.Windows.Controls.CheckBox || d is System.Windows.Controls.Primitives.ToggleButton) return;
+        // only the item whose header was clicked (not a child item bubbling up)
+        if (!IsWithinHeader(tvi, e.OriginalSource as DependencyObject)) return;
+
+        if (item.IsSelected)
+        {
+            item.IsSelected = false;
+            _vm.SelectedNode = null;
+            e.Handled = true;
+        }
+    }
+
+    private static bool IsWithinHeader(System.Windows.Controls.TreeViewItem tvi, DependencyObject? source)
+    {
+        // walk up from the click source; if we meet another TreeViewItem before tvi, the click was on a child item
+        for (var d = source; d != null; d = System.Windows.Media.VisualTreeHelper.GetParent(d))
+        {
+            if (d == tvi) return true;
+            if (d is System.Windows.Controls.TreeViewItem) return false;
+        }
+        return false;
+    }
+
+    private void NodeTree_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Escape) return;
+        if (_vm.SelectedNode is { } sel) sel.IsSelected = false;
+        _vm.SelectedNode = null;
+        e.Handled = true;
+    }
+
     private void ZoomExtents_Click(object sender, RoutedEventArgs e) => _viewer.ZoomExtents();
 
     private void GroupItem_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)

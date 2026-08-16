@@ -54,11 +54,13 @@
                 </Grid.RowDefinitions>
             <DockPanel Grid.Row="0">
                 <TextBlock DockPanel.Dock="Top" Text="Scene nodes" FontWeight="Bold" Margin="6,4"/>
-                <TreeView x:Name="NodeTree" ItemsSource="{Binding RootNodes}" SelectedItemChanged="NodeTree_SelectedItemChanged">
+                <TreeView x:Name="NodeTree" ItemsSource="{Binding RootNodes}" SelectedItemChanged="NodeTree_SelectedItemChanged"
+                          KeyDown="NodeTree_KeyDown">
                     <TreeView.ItemContainerStyle>
                         <Style TargetType="TreeViewItem">
                             <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
                             <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                            <EventSetter Event="PreviewMouseLeftButtonDown" Handler="TreeViewItem_PreviewMouseLeftButtonDown"/>
                         </Style>
                     </TreeView.ItemContainerStyle>
                     <TreeView.ItemTemplate>
@@ -141,7 +143,6 @@
             <hx:Viewport3DX Grid.Column="2" x:Name="Viewport"
                             BackgroundColor="#FF3A3A3A"
                             ShowCoordinateSystem="True" ShowViewCube="True"
-                            ZoomExtentsWhenLoaded="True"
                             MSAA="Four"
                             IsShadowMappingEnabled="False">
                 <hx:Viewport3DX.InputBindings>
